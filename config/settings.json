@@ -1,0 +1,19 @@
+{
+  "processing": {
+    "variant_widths": [960, 480],
+    "sharpen_radius": 1.2,
+    "sharpen_percent": 120,
+    "sharpen_threshold": 3,
+    "resample_method": "LANCZOS"
+  },
+  "export": {
+    "max_prefix": "__",
+    "medium_prefix": "_",
+    "small_prefix": "",
+    "medium_width": 960,
+    "small_width": 480,
+    "format": "WEBP",
+    "quality": 85,
+    "method": 4
+  }
+}

@@ -1,0 +1,38 @@
+/* Titica Bootstrap Theme – Grundkonfiguration für PySide6 */
+
+* {
+    font-family: 'Noto Sans', 'DejaVu Sans', sans-serif;
+    font-size: 12pt;
+    color: #1f2933;
+}
+
+QMainWindow {
+    background-color: #f8fafc;
+}
+
+QPushButton {
+    background-color: #0d6efd;
+    border: 1px solid #0a58ca;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #ffffff;
+}
+
+QPushButton:hover {
+    background-color: #0b5ed7;
+}
+
+QPushButton:pressed {
+    background-color: #0a53be;
+}
+
+QLineEdit, QComboBox {
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    padding: 6px;
+    background-color: #ffffff;
+}
+
+QStatusBar {
+    background-color: #e9ecef;
+}

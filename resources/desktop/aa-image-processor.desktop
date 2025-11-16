@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AA Image Processor
+Comment=Zuschneiden und exportieren von WebP-Varianten
+Exec=AA_IMAGE_PROCESSOR_BIN %u
+Icon=aa-image-processor
+Terminal=false
+MimeType=image/jpeg;image/png;image/webp;image/bmp;image/tiff;
+Categories=Graphics;Photography;
+StartupNotify=true
