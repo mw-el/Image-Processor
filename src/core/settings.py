@@ -18,15 +18,18 @@ class ProcessingSettings:
 
 
 @dataclass
+class VariantRule:
+    prefix: str
+    width: str | int
+    height: str | int
+
+
+@dataclass
 class ExportSettings:
-    max_prefix: str
-    medium_prefix: str
-    small_prefix: str
-    medium_width: int
-    small_width: int
     format: str
     quality: int
     method: int
+    variant_rules: dict[str, list[VariantRule]]
 
 
 @dataclass
@@ -44,14 +47,26 @@ DEFAULT_SETTINGS = {
         "resample_method": "LANCZOS",
     },
     "export": {
-        "max_prefix": "__",
-        "medium_prefix": "_",
-        "small_prefix": "",
-        "medium_width": 960,
-        "small_width": 480,
         "format": "WEBP",
         "quality": 85,
         "method": 4,
+        "variant_rules": {
+            "default": [
+                {"prefix": "__", "width": "original", "height": "original"},
+                {"prefix": "_", "width": 960, "height": "auto"},
+                {"prefix": "", "width": 480, "height": "auto"},
+            ],
+            "16:9": [
+                {"prefix": "__", "width": 3840, "height": 2160},
+                {"prefix": "_", "width": 1920, "height": 1080},
+                {"prefix": "", "width": 1280, "height": 720},
+            ],
+            "9:16": [
+                {"prefix": "__", "width": 2160, "height": 3840},
+                {"prefix": "_", "width": 1080, "height": 1920},
+                {"prefix": "", "width": 720, "height": 1280},
+            ],
+        },
     },
 }
 
@@ -81,15 +96,25 @@ def load_settings(path: Path | None = None) -> AppSettings:
         resample_method=resample_method,
     )
 
+    variant_rules_cfg = export.get("variant_rules", DEFAULT_SETTINGS["export"].get("variant_rules", {}))
+    variant_rules: dict[str, list[VariantRule]] = {}
+    for label, rules in variant_rules_cfg.items():
+        parsed_rules: list[VariantRule] = []
+        for rule in rules:
+            parsed_rules.append(
+                VariantRule(
+                    prefix=str(rule.get("prefix", "")),
+                    width=rule.get("width", "original"),
+                    height=rule.get("height", "auto"),
+                )
+            )
+        variant_rules[label] = parsed_rules
+
     export_settings = ExportSettings(
-        max_prefix=str(export.get("max_prefix", "__")),
-        medium_prefix=str(export.get("medium_prefix", "_")),
-        small_prefix=str(export.get("small_prefix", "")),
-        medium_width=int(export.get("medium_width", 960)),
-        small_width=int(export.get("small_width", 480)),
         format=str(export.get("format", "WEBP")),
         quality=int(export.get("quality", 85)),
         method=int(export.get("method", 4)),
+        variant_rules=variant_rules,
     )
 
     return AppSettings(processing=processing_settings, export=export_settings)

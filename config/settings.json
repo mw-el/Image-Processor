@@ -7,13 +7,25 @@
     "resample_method": "LANCZOS"
   },
   "export": {
-    "max_prefix": "__",
-    "medium_prefix": "_",
-    "small_prefix": "",
-    "medium_width": 960,
-    "small_width": 480,
     "format": "WEBP",
     "quality": 85,
-    "method": 4
+    "method": 4,
+    "variant_rules": {
+      "default": [
+        {"prefix": "__", "width": "original", "height": "original"},
+        {"prefix": "_", "width": 960, "height": "auto"},
+        {"prefix": "", "width": 480, "height": "auto"}
+      ],
+      "16:9": [
+        {"prefix": "__", "width": 3840, "height": 2160},
+        {"prefix": "_", "width": 1920, "height": 1080},
+        {"prefix": "", "width": 1280, "height": 720}
+      ],
+      "9:16": [
+        {"prefix": "__", "width": 2160, "height": 3840},
+        {"prefix": "_", "width": 1080, "height": 1920},
+        {"prefix": "", "width": 720, "height": 1280}
+      ]
+    }
   }
 }

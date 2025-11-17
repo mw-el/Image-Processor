@@ -11,20 +11,24 @@ Dieser Plan deckt die End-to-End-Szenarien ab, die vor einem Release durchgespie
 ## 2. Zuschneiden & Varianten
 1. Bild via Drag & Drop laden.
 2. Ratio-Buttons durchprobieren (1:1 ... 9:16) – Rahmen muss jeweils zentriert & korrekt skalieren.
-3. Custom-Ratio verwenden (z. B. 5:7) – Eingabe validieren, Rahmen sollte erscheinen.
-4. Rahmen verschieben/skalieren, anschließend „Ausschnitt übernehmen“. Statusbar bestätigt.
-5. `Ctrl+E` – WebP-Dateien `__name.webp`, `_name.webp`, `name.webp` liegen neben der Quelle.
+3. „Rahmen entfernen“ klicken → Overlay verschwindet.
+4. Custom-Ratio verwenden (z. B. 5:7) – Eingabe validieren, Rahmen sollte erscheinen.
+5. Rahmen verschieben/skalieren, anschließend „Ausschnitt übernehmen“. Statusbar bestätigt.
+6. `Ctrl+S` bzw. Button „Speichern“ – WebP-Dateien `__name.webp`, `_name.webp`, `name.webp` liegen neben der Quelle.
+7. Bei 16:9 bzw. 9:16 muss der Export 4K/1080p/720p-Varianten liefern; Dateinamen enthalten Auflösung + Ratio-Suffix (z. B. `_bild_1920x1080_16x9.webp`).
+8. Metadatenfeld (`key=value`) bearbeiten und erneut speichern – prüfen, ob Angaben übernommen werden (Dateien öffnen und XMP prüfen).
 
 ## 3. Bildanpassungen
-1. Kontrast-/Sättigungs-Buttons mehrfach nutzen – Vorschau aktualisiert live.
+1. Helligkeit-, Kontrast-, Sättigungs- und Schärfe-Slider bewegen – Vorschau aktualisiert live.
 2. Temperatur-Slider bewegen; Loslassen sollte Zustand sichern (Undo/Redo testen).
 3. Auto-Farbbalance anwenden und anschließend Undo (`Ctrl+Z`) + Redo (`Ctrl+Shift+Z`).
-4. Reset-zum-Original (`Ctrl+R`) – Nachfrage bestätigen, ursprüngliche Datei erneut laden.
+4. „Reset“-Button in der Slider-Reihe drücken – alle Slider springen auf 1.00 zurück, Vorschau zeigt Originalzustand.
+5. Reset-zum-Original (`Ctrl+R`) – Nachfrage bestätigen, ursprüngliche Datei erneut laden.
 
 ## 4. Fehlerszenarien
 1. Nicht unterstütztes Format laden → Fehlermeldung im Dialog + Statusbar.
 2. Cropping ohne geladenes Bild auslösen → Hinweisdialog.
-3. Export ohne Varianten (`Ctrl+E`) → Fehlermeldung.
+3. Speichern ohne Varianten (`Ctrl+S`) → Fehlermeldung.
 4. CLI-Start mit nicht existierender Datei → Statusbar-Hinweis „Datei nicht gefunden“.
 
 ## 5. Performance

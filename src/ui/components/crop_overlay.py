@@ -25,8 +25,8 @@ class CropOverlay(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setMouseTracking(True)
         self._selection: Optional[CropSelection] = None
-        self._overlay_color = QColor(13, 110, 253, 60)
-        self._border_color = QColor(13, 110, 253)
+        self._overlay_color = QColor(255, 0, 0, 50)
+        self._border_color = QColor(255, 0, 0)
         self._dragging = False
         self._resizing = False
         self._drag_offset = QPointF()

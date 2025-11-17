@@ -11,11 +11,12 @@ Desktop-App zum Zuschneiden von Bildern auf feste Aspect Ratios, optionales Upsc
 
 ## 3. Bedienoberfläche
 - **Datei öffnen**: Menü „Datei → Bild öffnen …“, Drag & Drop oder CLI-Parameter.
-- **Aspect Ratios**: Buttons 1:1, 2:3, … 9:16; „Eigene Ratio …“ erlaubt freie Eingabe.
+- **Aspect Ratios**: Buttons 1:1, 2:3, … 9:16; „Eigene Ratio …“ erlaubt freie Eingabe; „Rahmen entfernen“ neutralisiert den Crop.
 - **Crop-Rahmen**: per Maus verschieben/skalieren; fixiertes Verhältnis.
-- **Anpassungen**: Kontrast/Sättigung ± (je 0,1 Schritte), Temperatur-Slider (−100 bis +100), Auto-Farbbalance.
+- **Anpassungen**: Slider für Helligkeit, Kontrast, Sättigung, Schärfe sowie Temperatur (−100 bis +100) wirken live auf die Vorschau; Auto-Farbbalance und „Reset“ (stellt alle Slider zurück) stehen daneben.
+- **Metadaten**: Unterhalb der Regler werden Dateiname/Auflösung angezeigt; das Textfeld akzeptiert `key=value`-Zeilen, die beim Speichern in die Ausgabe übernommen werden.
 - **History**: Undo (`Ctrl+Z`), Redo (`Ctrl+Shift+Z`), Reset zum Original (`Ctrl+R`).
-- **Export**: `Ctrl+E` erstellt `__name.webp` (max), `_name.webp` (960px), `name.webp` (480px).
+- **Änderungen speichern**: `Ctrl+S` erstellt drei WebP-Dateien im selben Verzeichnis. Für 16:9/9:16 entstehen 4K/1080p/720p-Varianten, ansonsten Original/960px/480px; Dateinamen enthalten Auflösung + Ratio.
 
 ## 4. Troubleshooting
 | Problem | Lösung |

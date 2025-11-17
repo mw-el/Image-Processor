@@ -32,15 +32,18 @@ class ProcessingPipeline:
     def __init__(self, config: ProcessingConfig | None = None) -> None:
         self.config = config or ProcessingConfig()
 
-    def resize_with_quality(self, image: Image.Image, target_width: int) -> Image.Image:
+    def resize_with_quality(
+        self, image: Image.Image, target_width: int, target_height: int | None = None
+    ) -> Image.Image:
         if target_width <= 0:
             raise ProcessingError("Zielbreite muss größer als 0 sein.")
         width, height = image.size
-        if width == target_width:
+        if target_height is None:
+            aspect = height / width if width else 1.0
+            target_height = max(1, int(round(target_width * aspect)))
+        if target_width == width and target_height == height:
             resized = image.copy()
         else:
-            aspect = height / width
-            target_height = max(1, int(round(target_width * aspect)))
             resized = image.resize((target_width, target_height), self.config.resample_method)
 
         sharpened = resized.filter(

@@ -8,17 +8,31 @@ from PIL import Image, ImageEnhance, ImageOps
 
 @dataclass
 class AdjustmentState:
+    brightness: float = 1.0
     contrast: float = 1.0
     saturation: float = 1.0
+    sharpness: float = 1.0
     temperature: int = 0  # -100 .. 100
 
 
-def adjust_contrast(state: AdjustmentState, delta: float, minimum: float = 0.2, maximum: float = 3.0) -> None:
-    state.contrast = float(max(minimum, min(maximum, state.contrast + delta)))
+def _clamp_factor(value: float, minimum: float = 0.2, maximum: float = 3.0) -> float:
+    return float(max(minimum, min(maximum, value)))
 
 
-def adjust_saturation(state: AdjustmentState, delta: float, minimum: float = 0.2, maximum: float = 3.0) -> None:
-    state.saturation = float(max(minimum, min(maximum, state.saturation + delta)))
+def set_brightness(state: AdjustmentState, value: float) -> None:
+    state.brightness = _clamp_factor(value)
+
+
+def set_contrast(state: AdjustmentState, value: float) -> None:
+    state.contrast = _clamp_factor(value)
+
+
+def set_saturation(state: AdjustmentState, value: float) -> None:
+    state.saturation = _clamp_factor(value)
+
+
+def set_sharpness(state: AdjustmentState, value: float) -> None:
+    state.sharpness = _clamp_factor(value)
 
 
 def set_temperature(state: AdjustmentState, value: int) -> None:
@@ -28,10 +42,14 @@ def set_temperature(state: AdjustmentState, value: int) -> None:
 def apply_adjustments(image: Image.Image, state: AdjustmentState) -> Image.Image:
     result = image.convert("RGB")
 
+    if state.brightness != 1.0:
+        result = ImageEnhance.Brightness(result).enhance(state.brightness)
     if state.contrast != 1.0:
         result = ImageEnhance.Contrast(result).enhance(state.contrast)
     if state.saturation != 1.0:
         result = ImageEnhance.Color(result).enhance(state.saturation)
+    if state.sharpness != 1.0:
+        result = ImageEnhance.Sharpness(result).enhance(state.sharpness)
     if state.temperature != 0:
         result = _apply_temperature(result, state.temperature)
 

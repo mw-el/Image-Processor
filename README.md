@@ -47,10 +47,12 @@ python -m unittest discover -s tests
 Tests decken Resize-/Variantenerzeugung und das WebP-Benennungsschema des Exportservices ab.
 
 ## Bedienung
-- Zuschneiden über Ratio-Buttons + Custom-Dialog, anschließend erscheinen Kontrast-/Sättigungs-Buttons, Auto-Farbbalance und Temperatur-Slider.
+- Zuschneiden über Ratio-Buttons + Custom-Dialog; „Rahmen entfernen“ neutralisiert die Auswahl.
+- Live-Anpassungen via Slider (Helligkeit, Kontrast, Sättigung, Schärfe, Temperatur) + Auto-Farbbalance wirken direkt auf die Vorschau; der Button „Reset“ setzt alle Slider zurück.
 - Undo/Redo (`Ctrl+Z` / `Ctrl+Shift+Z`) sowie "Zurück zum Original" (`Ctrl+R`) greifen auf den internen History-Stack zu.
-- Export (`Ctrl+E`) speichert die jüngsten Varianten (`__name.webp`, `_name.webp`, `name.webp`).
+- Export/Speichern (`Ctrl+S`) legt die Varianten (`__name.webp`, `_name.webp`, `name.webp`) direkt neben der Originaldatei ab; 16:9/9:16 erhalten automatisch 4K/1080p/720p-Ausgaben mit Auflösungs- und Ratio-Suffix im Namen.
 - CLI: `python -m src.app <bilddatei>` öffnet optional direkt eine Datei (z. B. als Bild-Handler).
+- Rechts unter den Reglern werden Dateiname, Auflösung und Metadaten (bearbeitbar als `key=value`) angezeigt.
 
 ## Development Workflow
 - Detaillierter Entwicklungsplan: `docs/development_plan.md` (mit Checklisten + Timestamps).

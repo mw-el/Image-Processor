@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .core.logger import configure_logging
@@ -16,6 +17,13 @@ def _load_stylesheet() -> str:
     if not theme_path.exists():
         return ""
     return theme_path.read_text(encoding="utf-8")
+
+
+def _load_icon() -> QIcon | None:
+    icon_path = Path(__file__).resolve().parents[1] / "image_processor.png"
+    if icon_path.exists():
+        return QIcon(str(icon_path))
+    return None
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -37,12 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("AA Image Processor")
     app.setOrganizationName("AA Tools")
+    app.setDesktopFileName("aa-image-processor")
     app.setStyleSheet(_load_stylesheet())
+    icon = _load_icon()
+    if icon:
+        app.setWindowIcon(icon)
 
     if initial_path and not initial_path.exists():
         initial_path = None
 
     window = MainWindow(settings, initial_path=initial_path)
+    if icon:
+        window.setWindowIcon(icon)
     window.show()
 
     return app.exec()
