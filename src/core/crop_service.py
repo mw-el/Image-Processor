@@ -16,24 +16,34 @@ class CropServiceError(Exception):
     pass
 
 
-def compute_crop_box(selection_rect: QRectF, canvas_rect: QRectF, pixmap: QPixmap) -> CropResult:
-    if canvas_rect.width() <= 0 or canvas_rect.height() <= 0:
-        raise CropServiceError("Ungültige Canvas-Größe.")
+def compute_crop_box(
+    selection_rect: QRectF,
+    image_rect: QRectF,
+    pixmap: QPixmap,
+    current_scale: float,
+) -> CropResult:
+    if image_rect.width() <= 0 or image_rect.height() <= 0:
+        raise CropServiceError("Ungültige Bildprojektion.")
     if pixmap.isNull():
         raise CropServiceError("Kein Bild geladen.")
+    if current_scale <= 0:
+        raise CropServiceError("Ungültiger Zoomfaktor.")
+
+    intersection = selection_rect.intersected(image_rect)
+    if not intersection.isValid() or intersection.width() <= 0 or intersection.height() <= 0:
+        raise CropServiceError("Auswahl enthält keinen sichtbaren Bildanteil.")
+
+    left = max(0, int(round((intersection.x() - image_rect.x()) / current_scale)))
+    top = max(0, int(round((intersection.y() - image_rect.y()) / current_scale)))
+    width = max(1, int(round(intersection.width() / current_scale)))
+    height = max(1, int(round(intersection.height() / current_scale)))
 
     image_width = pixmap.width()
     image_height = pixmap.height()
-
-    rel_x = (selection_rect.x() - canvas_rect.x()) / canvas_rect.width()
-    rel_y = (selection_rect.y() - canvas_rect.y()) / canvas_rect.height()
-    rel_w = selection_rect.width() / canvas_rect.width()
-    rel_h = selection_rect.height() / canvas_rect.height()
-
-    left = max(0, min(image_width, int(round(rel_x * image_width))))
-    top = max(0, min(image_height, int(round(rel_y * image_height))))
-    width = max(1, min(image_width - left, int(round(rel_w * image_width))))
-    height = max(1, min(image_height - top, int(round(rel_h * image_height))))
+    if left + width > image_width:
+        width = max(1, image_width - left)
+    if top + height > image_height:
+        height = max(1, image_height - top)
 
     return CropResult(box=(left, top, width, height))
 

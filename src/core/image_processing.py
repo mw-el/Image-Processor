@@ -5,6 +5,8 @@ from typing import Iterable
 
 from PIL import Image, ImageFilter
 
+from .image_resize import resize_for_variant
+
 
 @dataclass
 class ProcessingConfig:
@@ -41,10 +43,12 @@ class ProcessingPipeline:
         if target_height is None:
             aspect = height / width if width else 1.0
             target_height = max(1, int(round(target_width * aspect)))
-        if target_width == width and target_height == height:
-            resized = image.copy()
-        else:
-            resized = image.resize((target_width, target_height), self.config.resample_method)
+        resized = resize_for_variant(
+            image,
+            target_width,
+            target_height,
+            resample_filter=self.config.resample_method,
+        )
 
         sharpened = resized.filter(
             ImageFilter.UnsharpMask(
