@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from PySide6.QtCore import QRectF, Qt, QPointF
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QImage
-from PySide6.QtWidgets import QWidget, QLabel
+from PySide6.QtCore import QRectF, Qt, QPointF, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QImage, QAction
+from PySide6.QtWidgets import QWidget, QLabel, QMenu
 from PIL import Image
 
 
@@ -20,6 +20,9 @@ class CropOverlay(QWidget):
     Lightweight overlay that draws a ratio-constrained rectangle.
     Provides dragging/resizing while preserving the aspect ratio.
     """
+
+    # Signal emitted when crop should be applied (double-click or context menu)
+    crop_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -46,6 +49,7 @@ class CropOverlay(QWidget):
 
     def set_selection(self, rect: QRectF, ratio: float) -> None:
         self._selection = CropSelection(rect=rect, aspect_ratio=ratio)
+        self.show()  # Ensure overlay is visible
         self.update()
 
     def clear_selection(self) -> None:
@@ -134,6 +138,30 @@ class CropOverlay(QWidget):
         self._resizing = False
         self._active_handle = None
         event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Handle double-click to apply crop."""
+        if not self._selection:
+            event.ignore()
+            return
+        if event.button() == Qt.LeftButton and self._selection.rect.contains(event.position()):
+            self.crop_requested.emit()
+            event.accept()
+        else:
+            event.ignore()
+
+    def contextMenuEvent(self, event) -> None:
+        """Show context menu with crop option."""
+        if not self._selection:
+            return
+        if not self._selection.rect.contains(event.pos()):
+            return
+
+        menu = QMenu(self)
+        apply_action = QAction("Ausschnitt übernehmen", self)
+        apply_action.triggered.connect(self.crop_requested.emit)
+        menu.addAction(apply_action)
+        menu.exec(event.globalPos())
 
     # Internal helpers -------------------------------------------------------
     def _draw_handles(self, painter: QPainter) -> None:

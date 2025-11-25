@@ -8,21 +8,20 @@ from typing import Iterable, Any
 from PySide6.QtCore import Qt, QRectF, QTimer, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QApplication,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QSlider,
     QSizePolicy,
-    QSplitter,
     QStatusBar,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +44,7 @@ from ..core.image_processing import ProcessingPipeline, ProcessingError, Process
 from ..core.export_service import ExportService, ExportServiceError, ExportConfig, ExportVariant
 from ..core.settings import AppSettings
 from ..core.crop_geometry import CropGeometry
+from ..core.recent_manager import RecentManager
 from .dialogs.custom_ratio_dialog import CustomRatioDialog
 from .dialogs.results_viewer import ResultsViewerDialog
 from .dialogs.save_as_dialog import SaveAsDialog
@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.crop_geometry: CropGeometry | None = None
         self.last_exported_paths: list[Path] = []
         self.balance_mode: int = 0  # 0=none, 1=photoshop, 2=conservative, 3=color-only
+        self.recent_manager = RecentManager()
 
         self.setWindowTitle("AA Image Processor")
         self.resize(1580, 900)  # +300px for browser sidebar
@@ -109,10 +110,6 @@ class MainWindow(QMainWindow):
         self.open_action = QAction("Bild öffnen …", self)
         self.open_action.setShortcut("Ctrl+O")
         self.open_action.triggered.connect(self.open_image_dialog)
-
-        self.crop_action = QAction("Ausschnitt übernehmen", self)
-        self.crop_action.setShortcut("Ctrl+Shift+C")
-        self.crop_action.triggered.connect(self.apply_crop)
 
         self.save_action = QAction("Änderungen speichern", self)
         self.save_action.setShortcut("Ctrl+S")
@@ -157,50 +154,22 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.reset_action)
 
     def _create_ui_with_browser(self) -> None:
-        """Create main UI with full-height browser on left side."""
-        # Root splitter: Browser (left) | Main Content (right)
-        root_splitter = QSplitter(Qt.Horizontal)
-
-        # Left: File browser (full height)
-        self.file_browser = FileBrowserSidebar(start_path=Path.home())
-        self.file_browser.image_selected.connect(self._handle_file_drop)
-        self.file_browser.setVisible(True)
-        root_splitter.addWidget(self.file_browser)
-
-        # Right: Container for toolbar + content + statusbar
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        # Toolbar (only in right container)
-        toolbar = QToolBar("Hauptwerkzeuge")
-        toolbar.setMovable(False)
-        toolbar.addAction(self.toggle_browser_action)
-        toolbar.addSeparator()
-        toolbar.addAction(self.open_action)
-        toolbar.addAction(self.crop_action)
-        toolbar.addAction(self.save_action)
-        toolbar.addSeparator()
-        toolbar.addAction(self.undo_action)
-        toolbar.addAction(self.redo_action)
-        toolbar.addAction(self.reset_action)
-        right_layout.addWidget(toolbar)
+        """Create main UI with browser in right panel."""
+        # Main container
+        main_container = QWidget()
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # Central content widget
-        self._create_central_content(right_layout)
+        self._create_central_content(main_layout)
 
-        # Statusbar (only in right container)
+        # Statusbar
         self.status_bar = QStatusBar()
-        right_layout.addWidget(self.status_bar)
-
-        # Add right container to splitter
-        root_splitter.addWidget(right_container)
-        root_splitter.setStretchFactor(0, 0)  # Browser: don't stretch
-        root_splitter.setStretchFactor(1, 1)  # Content: stretch
+        main_layout.addWidget(self.status_bar)
 
         # Set as central widget
-        self.setCentralWidget(root_splitter)
+        self.setCentralWidget(main_container)
 
         self._set_adjustment_controls_enabled(False)
         self._update_history_actions()
@@ -218,6 +187,7 @@ class MainWindow(QMainWindow):
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.navigate_previous.connect(self._navigate_to_previous_image)
         self.canvas.navigate_next.connect(self._navigate_to_next_image)
+        self.canvas.crop_overlay.crop_requested.connect(self.apply_crop)
 
         canvas_container = QWidget()
         canvas_container_layout = QVBoxLayout(canvas_container)
@@ -247,7 +217,7 @@ class MainWindow(QMainWindow):
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(6)
 
-        # Common button styles
+        # Common button styles - icons always white
         self.btn_style_normal = """
             QPushButton {
                 background-color: #2196F3;
@@ -264,6 +234,7 @@ class MainWindow(QMainWindow):
             }
             QPushButton:disabled {
                 background-color: #9E9E9E;
+                color: white;
             }
         """
 
@@ -289,9 +260,108 @@ class MainWindow(QMainWindow):
             }
             QPushButton:disabled {
                 background-color: #9E9E9E;
+                color: white;
             }
         """
 
+        self.adjustment_controls: list[QWidget] = []
+        btn_size = 40  # Square button size for icon buttons
+
+        # === ROW 1: File operation buttons (top) - always visible ===
+        file_row = QHBoxLayout()
+        file_row.setSpacing(6)
+
+        # Open file (system dialog)
+        self.open_file_btn = QPushButton()
+        self.open_file_btn.setIcon(qta.icon("mdi6.folder-open", color="white"))
+        self.open_file_btn.setIconSize(QSize(24, 24))
+        self.open_file_btn.setToolTip("Bild öffnen (Systemdialog)")
+        self.open_file_btn.setFixedSize(btn_size, btn_size)
+        self.open_file_btn.setStyleSheet(self.btn_style_normal)
+        self.open_file_btn.clicked.connect(self.open_image_dialog)
+        file_row.addWidget(self.open_file_btn)
+
+        # Recent images button with dropdown
+        self.recent_images_btn = QPushButton()
+        self.recent_images_btn.setIcon(qta.icon("mdi6.image-multiple", color="white"))
+        self.recent_images_btn.setIconSize(QSize(24, 24))
+        self.recent_images_btn.setToolTip("Zuletzt geöffnete Bilder")
+        self.recent_images_btn.setFixedSize(btn_size, btn_size)
+        self.recent_images_btn.setStyleSheet(self.btn_style_normal)
+        self.recent_images_btn.clicked.connect(self._show_recent_images_menu)
+        file_row.addWidget(self.recent_images_btn)
+
+        # Recent folders button with dropdown
+        self.recent_folders_btn = QPushButton()
+        self.recent_folders_btn.setIcon(qta.icon("mdi6.folder-clock", color="white"))
+        self.recent_folders_btn.setIconSize(QSize(24, 24))
+        self.recent_folders_btn.setToolTip("Zuletzt geöffnete Ordner")
+        self.recent_folders_btn.setFixedSize(btn_size, btn_size)
+        self.recent_folders_btn.setStyleSheet(self.btn_style_normal)
+        self.recent_folders_btn.clicked.connect(self._show_recent_folders_menu)
+        file_row.addWidget(self.recent_folders_btn)
+
+        # Toggle browser panel
+        self.toggle_browser_btn = QPushButton()
+        self.toggle_browser_btn.setIcon(qta.icon("mdi6.folder-eye", color="white"))
+        self.toggle_browser_btn.setIconSize(QSize(24, 24))
+        self.toggle_browser_btn.setToolTip("Browser-Panel ein/aus")
+        self.toggle_browser_btn.setFixedSize(btn_size, btn_size)
+        self.toggle_browser_btn.setCheckable(True)
+        self.toggle_browser_btn.setChecked(False)  # Start hidden
+        self.toggle_browser_btn.setStyleSheet(self.btn_style_checkable)
+        self.toggle_browser_btn.clicked.connect(self._toggle_file_browser)
+        file_row.addWidget(self.toggle_browser_btn)
+
+        # Undo
+        self.undo_btn = QPushButton()
+        self.undo_btn.setIcon(qta.icon("mdi6.undo", color="white"))
+        self.undo_btn.setIconSize(QSize(24, 24))
+        self.undo_btn.setToolTip("Rückgängig (Ctrl+Z)")
+        self.undo_btn.setFixedSize(btn_size, btn_size)
+        self.undo_btn.setStyleSheet(self.btn_style_normal)
+        self.undo_btn.clicked.connect(self.undo_change)
+        self.undo_btn.setEnabled(False)
+        file_row.addWidget(self.undo_btn)
+
+        # Redo
+        self.redo_btn = QPushButton()
+        self.redo_btn.setIcon(qta.icon("mdi6.redo", color="white"))
+        self.redo_btn.setIconSize(QSize(24, 24))
+        self.redo_btn.setToolTip("Wiederholen (Ctrl+Shift+Z)")
+        self.redo_btn.setFixedSize(btn_size, btn_size)
+        self.redo_btn.setStyleSheet(self.btn_style_normal)
+        self.redo_btn.clicked.connect(self.redo_change)
+        self.redo_btn.setEnabled(False)
+        file_row.addWidget(self.redo_btn)
+
+        # Reset to original
+        self.reset_original_btn = QPushButton()
+        self.reset_original_btn.setIcon(qta.icon("mdi6.image-refresh", color="white"))
+        self.reset_original_btn.setIconSize(QSize(24, 24))
+        self.reset_original_btn.setToolTip("Zurück zum Original (Ctrl+R)")
+        self.reset_original_btn.setFixedSize(btn_size, btn_size)
+        self.reset_original_btn.setStyleSheet(self.btn_style_normal)
+        self.reset_original_btn.clicked.connect(self.reset_to_original)
+        self.reset_original_btn.setEnabled(False)
+        file_row.addWidget(self.reset_original_btn)
+
+        file_row.addStretch()
+        controls_layout.addLayout(file_row)
+
+        # === File browser (shows when toggle is checked) ===
+        self.file_browser = FileBrowserSidebar(start_path=Path.home())
+        self.file_browser.image_selected.connect(self._handle_file_drop)
+        self.file_browser.hide()  # Start hidden
+        controls_layout.addWidget(self.file_browser, stretch=1)
+
+        # === Image controls container (shows when browser is hidden AND image loaded) ===
+        self.image_controls_container = QWidget()
+        image_controls_layout = QVBoxLayout(self.image_controls_container)
+        image_controls_layout.setContentsMargins(0, 0, 0, 0)
+        image_controls_layout.setSpacing(6)
+
+        # === Aspect Ratio buttons ===
         ratio_grid = QGridLayout()
         ratio_grid.setSpacing(6)
         self.ratio_buttons: dict[str, QPushButton] = {}
@@ -319,139 +389,115 @@ class MainWindow(QMainWindow):
             if label == "?:?":
                 self.custom_ratio_button = btn
 
-        controls_layout.addLayout(ratio_grid)
+        image_controls_layout.addLayout(ratio_grid)
 
-        adjustments_layout = QVBoxLayout()
-        adjustments_layout.setSpacing(4)
-        self.adjustment_controls: list[QWidget] = []
+        # === Accordion header (Auto + Reset + Expand) ===
+        accordion_header = QHBoxLayout()
+        accordion_header.setSpacing(6)
+
+        self.auto_balance_btn = QPushButton()
+        self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+        self.auto_balance_btn.setIconSize(QSize(24, 24))
+        self.auto_balance_btn.setToolTip("Automatische Anpassungen durchprobieren")
+        self.auto_balance_btn.clicked.connect(self._auto_color_balance)
+        self.auto_balance_btn.setFixedSize(btn_size, btn_size)
+        self.auto_balance_btn.setStyleSheet(self.btn_style_normal)
+        accordion_header.addWidget(self.auto_balance_btn)
+        self.adjustment_controls.append(self.auto_balance_btn)
+
+        self.reset_sliders_btn = QPushButton()
+        self.reset_sliders_btn.setIcon(qta.icon("mdi6.refresh", color="white"))
+        self.reset_sliders_btn.setIconSize(QSize(24, 24))
+        self.reset_sliders_btn.setToolTip("Alle Regler auf Standardwerte zurücksetzen")
+        self.reset_sliders_btn.clicked.connect(self._reset_sliders_clicked)
+        self.reset_sliders_btn.setFixedSize(btn_size, btn_size)
+        self.reset_sliders_btn.setStyleSheet(self.btn_style_normal)
+        accordion_header.addWidget(self.reset_sliders_btn)
+        self.adjustment_controls.append(self.reset_sliders_btn)
+
+        accordion_header.addStretch()
+
+        # Expand/collapse button for sliders
+        self.expand_sliders_btn = QPushButton()
+        self.expand_sliders_btn.setIcon(qta.icon("mdi6.chevron-down", color="white"))
+        self.expand_sliders_btn.setIconSize(QSize(24, 24))
+        self.expand_sliders_btn.setToolTip("Feineinstellungen ein-/ausblenden")
+        self.expand_sliders_btn.setFixedSize(btn_size, btn_size)
+        self.expand_sliders_btn.setCheckable(True)
+        self.expand_sliders_btn.setStyleSheet(self.btn_style_checkable)
+        self.expand_sliders_btn.clicked.connect(self._toggle_sliders_visibility)
+        accordion_header.addWidget(self.expand_sliders_btn)
+
+        image_controls_layout.addLayout(accordion_header)
+
+        # === Slider container (collapsible) ===
+        self.sliders_container = QWidget()
+        sliders_layout = QVBoxLayout(self.sliders_container)
+        sliders_layout.setContentsMargins(0, 0, 0, 0)
+        sliders_layout.setSpacing(4)
         self.factor_sliders: dict[str, dict[str, Any]] = {}
 
         factor_slider_defs = [
-            ("brightness", "Helligkeit"),
-            ("contrast", "Kontrast"),
-            ("saturation", "Sättigung"),
-            ("sharpness", "Schärfe"),
+            ("brightness", "Helligkeit", "mdi6.brightness-6"),
+            ("contrast", "Kontrast", "mdi6.contrast-box"),
+            ("saturation", "Sättigung", "mdi6.palette"),
+            ("sharpness", "Schärfe", "mdi6.blur"),
         ]
-        for field, title in factor_slider_defs:
-            slider, label = self._add_factor_slider(adjustments_layout, field, title)
+        for field, title, icon_name in factor_slider_defs:
+            slider, label = self._add_factor_slider_with_icon(sliders_layout, field, title, icon_name)
             self.factor_sliders[field] = {"slider": slider, "label": label, "title": title}
 
-        temp_container = QVBoxLayout()
-        self.temperature_label = QLabel("Temperatur: 0")
-        temp_container.addWidget(self.temperature_label)
+        # Temperature slider
+        temp_row = QHBoxLayout()
+        temp_icon = QLabel()
+        temp_icon.setPixmap(qta.icon("mdi6.thermometer", color="#666").pixmap(20, 20))
+        temp_icon.setFixedWidth(24)
+        temp_row.addWidget(temp_icon)
+        self.temperature_label = QLabel("0")
+        self.temperature_label.setFixedWidth(30)
+        temp_row.addWidget(self.temperature_label)
         self.temperature_slider = QSlider(Qt.Horizontal)
         self.temperature_slider.setRange(-100, 100)
         self.temperature_slider.setValue(0)
         self.temperature_slider.valueChanged.connect(self._temperature_changed)
         self.temperature_slider.sliderReleased.connect(self._commit_temperature_state)
-        temp_container.addWidget(self.temperature_slider)
-        adjustments_layout.addLayout(temp_container)
+        temp_row.addWidget(self.temperature_slider)
+        sliders_layout.addLayout(temp_row)
         self.adjustment_controls.extend([self.temperature_label, self.temperature_slider])
 
         # RGB Balance Sliders
-        self.red_balance_label = QLabel("Rot-Balance: 0")
-        self.red_balance_slider = QSlider(Qt.Horizontal)
-        self.red_balance_slider.setRange(-100, 100)
-        self.red_balance_slider.setValue(0)
-        self.red_balance_slider.valueChanged.connect(self._red_balance_changed)
-        self.red_balance_slider.sliderReleased.connect(lambda: self._commit_rgb_state("Rot-Balance"))
-        red_container = QVBoxLayout()
-        red_container.addWidget(self.red_balance_label)
-        red_container.addWidget(self.red_balance_slider)
-        adjustments_layout.addLayout(red_container)
-        self.adjustment_controls.extend([self.red_balance_label, self.red_balance_slider])
+        for color, label_attr, slider_attr, change_method, color_hex in [
+            ("Rot", "red_balance_label", "red_balance_slider", self._red_balance_changed, "#F44336"),
+            ("Grün", "green_balance_label", "green_balance_slider", self._green_balance_changed, "#4CAF50"),
+            ("Blau", "blue_balance_label", "blue_balance_slider", self._blue_balance_changed, "#2196F3"),
+        ]:
+            row = QHBoxLayout()
+            icon = QLabel()
+            icon.setPixmap(qta.icon("mdi6.circle", color=color_hex).pixmap(20, 20))
+            icon.setFixedWidth(24)
+            row.addWidget(icon)
+            label = QLabel("0")
+            label.setFixedWidth(30)
+            setattr(self, label_attr, label)
+            row.addWidget(label)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(-100, 100)
+            slider.setValue(0)
+            slider.valueChanged.connect(change_method)
+            slider.sliderReleased.connect(lambda c=color: self._commit_rgb_state(f"{c}-Balance"))
+            setattr(self, slider_attr, slider)
+            row.addWidget(slider)
+            sliders_layout.addLayout(row)
+            self.adjustment_controls.extend([label, slider])
 
-        self.green_balance_label = QLabel("Grün-Balance: 0")
-        self.green_balance_slider = QSlider(Qt.Horizontal)
-        self.green_balance_slider.setRange(-100, 100)
-        self.green_balance_slider.setValue(0)
-        self.green_balance_slider.valueChanged.connect(self._green_balance_changed)
-        self.green_balance_slider.sliderReleased.connect(lambda: self._commit_rgb_state("Grün-Balance"))
-        green_container = QVBoxLayout()
-        green_container.addWidget(self.green_balance_label)
-        green_container.addWidget(self.green_balance_slider)
-        adjustments_layout.addLayout(green_container)
-        self.adjustment_controls.extend([self.green_balance_label, self.green_balance_slider])
+        # Hide sliders by default
+        self.sliders_container.hide()
+        image_controls_layout.addWidget(self.sliders_container)
 
-        self.blue_balance_label = QLabel("Blau-Balance: 0")
-        self.blue_balance_slider = QSlider(Qt.Horizontal)
-        self.blue_balance_slider.setRange(-100, 100)
-        self.blue_balance_slider.setValue(0)
-        self.blue_balance_slider.valueChanged.connect(self._blue_balance_changed)
-        self.blue_balance_slider.sliderReleased.connect(lambda: self._commit_rgb_state("Blau-Balance"))
-        blue_container = QVBoxLayout()
-        blue_container.addWidget(self.blue_balance_label)
-        blue_container.addWidget(self.blue_balance_slider)
-        adjustments_layout.addLayout(blue_container)
-        self.adjustment_controls.extend([self.blue_balance_label, self.blue_balance_slider])
+        # Stretch to push save buttons to bottom
+        image_controls_layout.addStretch()
 
-        controls_layout.addLayout(adjustments_layout)
-
-        # Row 1: Autoanpassung + Reset
-        auto_reset_row = QHBoxLayout()
-        auto_reset_row.setSpacing(8)
-        half_width = int((self.controls_width - auto_reset_row.spacing()) / 2) - 4
-
-        self.auto_balance_btn = QPushButton("Autoanpassung")
-        self.auto_balance_btn.setToolTip("Automatische Anpassungen durchprobieren")
-        self.auto_balance_btn.clicked.connect(self._auto_color_balance)
-        self.auto_balance_btn.setFixedWidth(half_width)
-        self.auto_balance_btn.setStyleSheet(self.btn_style_normal)
-        auto_reset_row.addWidget(self.auto_balance_btn)
-        self.adjustment_controls.append(self.auto_balance_btn)
-
-        self.reset_sliders_btn = QPushButton("Reset")
-        self.reset_sliders_btn.setToolTip("Alle Regler auf Standardwerte zurücksetzen")
-        self.reset_sliders_btn.clicked.connect(self._reset_sliders_clicked)
-        self.reset_sliders_btn.setFixedWidth(half_width)
-        self.reset_sliders_btn.setStyleSheet(self.btn_style_normal)
-        auto_reset_row.addWidget(self.reset_sliders_btn)
-        self.adjustment_controls.append(self.reset_sliders_btn)
-
-        controls_layout.addLayout(auto_reset_row)
-
-        # Row 2: Speichern + Speichern unter + Ergebnisse
-        save_row = QHBoxLayout()
-        save_row.setSpacing(8)
-        third_width = int((self.controls_width - 2 * save_row.spacing()) / 3) - 4
-
-        self.save_changes_btn = QPushButton()
-        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save", color="white"))
-        self.save_changes_btn.setIconSize(QSize(24, 24))
-        self.save_changes_btn.setToolTip("Aktuelle Varianten exportieren")
-        self.save_changes_btn.clicked.connect(self.export_variants)
-        self.save_changes_btn.setFixedWidth(third_width)
-        self.save_changes_btn.setStyleSheet(self.btn_style_normal)
-        save_row.addWidget(self.save_changes_btn)
-        self.adjustment_controls.append(self.save_changes_btn)
-
-        self.save_as_btn = QPushButton()
-        self.save_as_btn.setIcon(qta.icon("mdi6.content-save-cog", color="white"))
-        self.save_as_btn.setIconSize(QSize(24, 24))
-        self.save_as_btn.setToolTip("Mit Auflösung und Format speichern")
-        self.save_as_btn.clicked.connect(self._save_variants_as)
-        self.save_as_btn.setFixedWidth(third_width)
-        self.save_as_btn.setStyleSheet(self.btn_style_normal)
-        save_row.addWidget(self.save_as_btn)
-        self.adjustment_controls.append(self.save_as_btn)
-
-        self.view_results_btn = QPushButton()
-        self.view_results_btn.setIcon(qta.icon("mdi6.eye", color="white"))
-        self.view_results_btn.setIconSize(QSize(24, 24))
-        self.view_results_btn.setToolTip("Exportierte Bilder im Vergleich mit Original anzeigen")
-        self.view_results_btn.clicked.connect(self._show_results_viewer)
-        self.view_results_btn.setEnabled(False)
-        self.view_results_btn.setFixedWidth(third_width)
-        self.view_results_btn.setStyleSheet(self.btn_style_normal)
-        save_row.addWidget(self.view_results_btn)
-
-        controls_layout.addLayout(save_row)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        controls_layout.addWidget(separator)
-
+        # === Metadata section ===
         metadata_layout = QVBoxLayout()
         metadata_layout.setSpacing(2)
         self.metadata_name_label = QLabel("Datei: -")
@@ -460,16 +506,61 @@ class MainWindow(QMainWindow):
         metadata_layout.addWidget(self.metadata_resolution_label)
         self.metadata_edit = QPlainTextEdit()
         self.metadata_edit.setPlaceholderText("Metadaten im Format key=value pro Zeile")
-        self.metadata_edit.setFixedHeight(140)
+        self.metadata_edit.setFixedHeight(100)
         self.metadata_edit.textChanged.connect(self._metadata_changed)
         metadata_layout.addWidget(self.metadata_edit)
-        controls_layout.addLayout(metadata_layout)
+        image_controls_layout.addLayout(metadata_layout)
 
+        # === Status log ===
         self.status_log = QPlainTextEdit()
         self.status_log.setReadOnly(True)
-        self.status_log.setMinimumHeight(100)
+        self.status_log.setFixedHeight(80)
         self.status_log.setPlaceholderText("Statusmeldungen…")
-        controls_layout.addWidget(self.status_log)
+        image_controls_layout.addWidget(self.status_log)
+
+        # === Save buttons ===
+        save_row = QHBoxLayout()
+        save_row.setSpacing(6)
+
+        self.save_changes_btn = QPushButton()
+        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save", color="white"))
+        self.save_changes_btn.setIconSize(QSize(24, 24))
+        self.save_changes_btn.setToolTip("Aktuelle Varianten exportieren (Ctrl+S)")
+        self.save_changes_btn.setFixedSize(btn_size, btn_size)
+        self.save_changes_btn.setStyleSheet(self.btn_style_normal)
+        self.save_changes_btn.clicked.connect(self.export_variants)
+        save_row.addWidget(self.save_changes_btn)
+        self.adjustment_controls.append(self.save_changes_btn)
+
+        self.save_as_btn = QPushButton()
+        self.save_as_btn.setIcon(qta.icon("mdi6.content-save-cog", color="white"))
+        self.save_as_btn.setIconSize(QSize(24, 24))
+        self.save_as_btn.setToolTip("Mit Auflösung und Format speichern")
+        self.save_as_btn.setFixedSize(btn_size, btn_size)
+        self.save_as_btn.setStyleSheet(self.btn_style_normal)
+        self.save_as_btn.clicked.connect(self._save_variants_as)
+        save_row.addWidget(self.save_as_btn)
+        self.adjustment_controls.append(self.save_as_btn)
+
+        self.view_results_btn = QPushButton()
+        self.view_results_btn.setIcon(qta.icon("mdi6.eye", color="white"))
+        self.view_results_btn.setIconSize(QSize(24, 24))
+        self.view_results_btn.setToolTip("Exportierte Bilder im Vergleich mit Original anzeigen")
+        self.view_results_btn.setEnabled(False)
+        self.view_results_btn.setFixedSize(btn_size, btn_size)
+        self.view_results_btn.setStyleSheet(self.btn_style_normal)
+        self.view_results_btn.clicked.connect(self._show_results_viewer)
+        save_row.addWidget(self.view_results_btn)
+
+        save_row.addStretch()
+        image_controls_layout.addLayout(save_row)
+
+        # Hide image controls until image is loaded
+        self.image_controls_container.hide()
+        controls_layout.addWidget(self.image_controls_container, stretch=1)
+
+        # Add stretch at end to push file_row to top when containers are hidden
+        controls_layout.addStretch()
 
         root_layout.addWidget(controls_widget, stretch=1)
 
@@ -527,7 +618,15 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Aktuelles Bild: {path.name}", 5000)
         self._append_status(f"Geladen: {path}")
         self._load_metadata_info(path)
+        # Add to recent files and folders
+        self.recent_manager.add_file(path)
+        self.recent_manager.add_folder(path.parent)
         self._update_navigation_buttons()
+
+        # Hide browser and show image controls after loading image
+        self.toggle_browser_btn.setChecked(False)
+        self.file_browser.hide()
+        self.image_controls_container.show()
 
     def _open_initial_image(self, path: Path) -> None:
         if not path.exists():
@@ -570,17 +669,32 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message, 5000)
 
     # --- Ratio handling ------------------------------------------------------
-    def _apply_ratio(self, ratio: float) -> None:
-        if not self.image_store.current:
+    def _apply_ratio(self, ratio: float) -> bool:
+        self._append_status(f"_apply_ratio aufgerufen mit ratio={ratio:.4f}")
+        if not self.session.has_image():
             self._show_error("Bitte zuerst ein Bild laden.")
-            return
+            self._append_status("✗ Fehler: Kein Bild in Session")
+            return False
+        pixmap = self.canvas.current_pixmap()
+        if pixmap is None or pixmap.isNull():
+            self._show_error("Kein Bild geladen.")
+            self._append_status("✗ Fehler: Canvas Pixmap ist None oder null")
+            return False
         rect = self.canvas.image_rect_in_canvas()
+        self._append_status(f"Canvas Bildbereich: {rect.width():.1f}x{rect.height():.1f}")
         if rect.width() <= 0 or rect.height() <= 0:
             rect = QRectF(self.canvas.rect())
+        if rect.width() <= 0 or rect.height() <= 0:
+            self._show_error("Bildbereich konnte nicht berechnet werden.")
+            self._append_status("✗ Fehler: Ungültiger Bildbereich")
+            return False
         centered_rect = self._compute_centered_rect(rect, ratio)
+        self._append_status(f"Zentrierter Crop-Bereich berechnet: {centered_rect.width():.1f}x{centered_rect.height():.1f}")
         self.canvas.crop_overlay.set_selection(centered_rect, ratio)
         self.has_ratio_selection = True
         self.logger.info("Aspect Ratio gesetzt: %.4f", ratio)
+        self._append_status(f"✓ Crop-Overlay aktiviert mit Ratio {ratio:.4f}")
+        return True
 
     def _compute_centered_rect(self, bounds, ratio: float):
         width = bounds.width()
@@ -618,6 +732,12 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Aspect Ratio entfernt", 4000)
             return
 
+        if not self.session.has_image():
+            self._show_error("Bitte zuerst ein Bild laden.")
+            button.setChecked(False)
+            self.active_ratio_button = None
+            return
+
         if self.active_ratio_button:
             self.active_ratio_button.setChecked(False)
         self.active_ratio_button = button
@@ -635,7 +755,11 @@ class MainWindow(QMainWindow):
                 label_text = f"{int(width)}:{int(height)}"
                 custom_tuple = self.custom_ratio_tuple
             else:
-                dialog = CustomRatioDialog(self)
+                # Pass last custom ratio as default values
+                default_w = self.custom_ratio_tuple[0] if self.custom_ratio_tuple else 0
+                default_h = self.custom_ratio_tuple[1] if self.custom_ratio_tuple else 0
+                self._append_status(f"Öffne Custom Ratio Dialog (Standard: {default_w}:{default_h})")
+                dialog = CustomRatioDialog(self, default_width=default_w, default_height=default_h)
                 if dialog.exec() == dialog.Accepted and dialog.selection:
                     width = dialog.selection.width
                     height = dialog.selection.height
@@ -643,9 +767,11 @@ class MainWindow(QMainWindow):
                     ratio_value = width / height if height else 1.0
                     label_text = f"{int(width)}:{int(height)}"
                     custom_tuple = self.custom_ratio_tuple
+                    self._append_status(f"Custom Ratio gewählt: {label_text} = {ratio_value:.4f}")
                     if self.custom_ratio_button:
                         self.custom_ratio_button.setText(label_text)
                 else:
+                    self._append_status("Custom Ratio Dialog abgebrochen")
                     button.setChecked(False)
                     self.active_ratio_button = None
                     return
@@ -659,9 +785,17 @@ class MainWindow(QMainWindow):
             return
 
         self.session.set_ratio(label_text, ratio_value, custom_tuple)
-        self._apply_ratio(ratio_value)
+        if not self._apply_ratio(ratio_value):
+            self.session.clear_ratio()
+            button.setChecked(False)
+            self.active_ratio_button = None
+            self.has_ratio_selection = False
+            self._exit_crop_mode()
+            return
+
         button.setChecked(True)
         self.has_ratio_selection = True
+        self.status_bar.showMessage(f"Aspect Ratio gesetzt: {label_text}", 4000)
 
     def _enter_crop_mode(self) -> None:
         if not self.session.has_image():
@@ -669,7 +803,15 @@ class MainWindow(QMainWindow):
         self.session.reset_base_to_original()
         self.current_adjusted_image = None
         self.crop_geometry = None
+        # Display the base image on canvas
+        base_image = self.session.current_base()
+        self.canvas.display_pil_image(base_image)
         self._append_status("Crop-Modus aktiviert")
+
+    def _exit_crop_mode(self) -> None:
+        """Exit crop mode without applying crop."""
+        self.canvas.crop_overlay.clear_selection()
+        self._append_status("Crop-Modus verlassen")
 
     def apply_crop(self) -> None:
         selection = self.canvas.crop_overlay.current_selection()
@@ -761,7 +903,7 @@ class MainWindow(QMainWindow):
 
     def _on_factor_slider_change(self, field: str, title: str, value: int, label: QLabel) -> None:
         factor = self._slider_to_factor(value)
-        label.setText(f"{title}: {factor:.2f}")
+        label.setText(f"{factor:.2f}")
         self.adjustment_controller.update_factor(field, factor)
 
     def _commit_factor_state(self, title: str) -> None:
@@ -770,7 +912,7 @@ class MainWindow(QMainWindow):
         self._commit_current_state(f"{title} angepasst")
 
     def _temperature_changed(self, value: int) -> None:
-        self.temperature_label.setText(f"Temperatur: {value}")
+        self.temperature_label.setText(str(value))
         self.adjustment_controller.update_temperature(value)
 
     def _commit_temperature_state(self) -> None:
@@ -779,15 +921,15 @@ class MainWindow(QMainWindow):
         self._commit_current_state("Temperatur angepasst")
 
     def _red_balance_changed(self, value: int) -> None:
-        self.red_balance_label.setText(f"Rot-Balance: {value}")
+        self.red_balance_label.setText(str(value))
         self.adjustment_controller.update_red_balance(value)
 
     def _green_balance_changed(self, value: int) -> None:
-        self.green_balance_label.setText(f"Grün-Balance: {value}")
+        self.green_balance_label.setText(str(value))
         self.adjustment_controller.update_green_balance(value)
 
     def _blue_balance_changed(self, value: int) -> None:
-        self.blue_balance_label.setText(f"Blau-Balance: {value}")
+        self.blue_balance_label.setText(str(value))
         self.adjustment_controller.update_blue_balance(value)
 
     def _commit_rgb_state(self, label: str) -> None:
@@ -809,17 +951,20 @@ class MainWindow(QMainWindow):
             # Photoshop-style
             optimal_state = calculate_auto_balance_photoshop_style(base_image)
             mode_name = "Auto 1"
-            self.auto_balance_btn.setText("Autoanpassung (1/3)")
+            self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+            self.auto_balance_btn.setText(" Auto 1")
         elif self.balance_mode == 2:
             # Conservative
             optimal_state = calculate_auto_balance_conservative(base_image)
             mode_name = "Auto 2"
-            self.auto_balance_btn.setText("Autoanpassung (2/3)")
+            self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+            self.auto_balance_btn.setText(" Auto 2")
         else:  # mode == 3
             # Color-only
             optimal_state = calculate_auto_balance_color_only(base_image)
             mode_name = "Auto 3"
-            self.auto_balance_btn.setText("Autoanpassung (3/3)")
+            self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+            self.auto_balance_btn.setText(" Auto 3")
 
         self.adjustment_controller.set_state(optimal_state)
         self._sync_all_sliders()
@@ -840,7 +985,8 @@ class MainWindow(QMainWindow):
         self._render_adjusted_image()
         self._commit_current_state("Einstellungen zurückgesetzt")
         self.balance_mode = 0
-        self.auto_balance_btn.setText("Autoanpassung")
+        self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+        self.auto_balance_btn.setText("")
 
     def _show_results_viewer(self) -> None:
         """Open dialog to view original and exported images."""
@@ -855,32 +1001,45 @@ class MainWindow(QMainWindow):
             self._show_error(f"Fehler beim Öffnen der Ergebnisansicht: {exc}")
 
     def _toggle_file_browser(self, checked: bool) -> None:
-        """Toggle file browser sidebar visibility."""
+        """Toggle between file browser and image controls."""
         self.file_browser.setVisible(checked)
+        # Only show image controls if browser hidden AND image loaded
+        if not checked and self.session.has_image():
+            self.image_controls_container.show()
+        else:
+            self.image_controls_container.hide()
+
+    def _toggle_sliders_visibility(self, checked: bool) -> None:
+        """Toggle slider container visibility (accordion)."""
+        self.sliders_container.setVisible(checked)
+        if checked:
+            self.expand_sliders_btn.setIcon(qta.icon("mdi6.chevron-up", color="white"))
+        else:
+            self.expand_sliders_btn.setIcon(qta.icon("mdi6.chevron-down", color="white"))
 
     def _sync_temperature_slider(self, value: int) -> None:
         if hasattr(self, "temperature_slider"):
             self.temperature_slider.blockSignals(True)
             self.temperature_slider.setValue(value)
             self.temperature_slider.blockSignals(False)
-            self.temperature_label.setText(f"Temperatur: {value}")
+            self.temperature_label.setText(str(value))
 
     def _sync_rgb_sliders(self, red: int, green: int, blue: int) -> None:
         if hasattr(self, "red_balance_slider"):
             self.red_balance_slider.blockSignals(True)
             self.red_balance_slider.setValue(red)
             self.red_balance_slider.blockSignals(False)
-            self.red_balance_label.setText(f"Rot-Balance: {red}")
+            self.red_balance_label.setText(str(red))
 
             self.green_balance_slider.blockSignals(True)
             self.green_balance_slider.setValue(green)
             self.green_balance_slider.blockSignals(False)
-            self.green_balance_label.setText(f"Grün-Balance: {green}")
+            self.green_balance_label.setText(str(green))
 
             self.blue_balance_slider.blockSignals(True)
             self.blue_balance_slider.setValue(blue)
             self.blue_balance_slider.blockSignals(False)
-            self.blue_balance_label.setText(f"Blau-Balance: {blue}")
+            self.blue_balance_label.setText(str(blue))
 
     def _set_adjustment_controls_enabled(self, enabled: bool) -> None:
         for widget in getattr(self, "adjustment_controls", []):
@@ -977,7 +1136,8 @@ class MainWindow(QMainWindow):
         self._reset_zoom_controls()
         self.balance_mode = 0
         if hasattr(self, "auto_balance_btn"):
-            self.auto_balance_btn.setText("Autoanpassung")
+            self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
+            self.auto_balance_btn.setText("")
 
     def _reset_zoom_controls(self) -> None:
         if hasattr(self, "zoom_controller"):
@@ -991,9 +1151,21 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _update_history_actions(self) -> None:
-        self.undo_action.setEnabled(bool(self.image_store.undo_stack))
-        self.redo_action.setEnabled(bool(self.image_store.redo_stack))
-        self.reset_action.setEnabled(self.image_store.original is not None)
+        has_undo = bool(self.image_store.undo_stack)
+        has_redo = bool(self.image_store.redo_stack)
+        has_original = self.image_store.original is not None
+
+        self.undo_action.setEnabled(has_undo)
+        self.redo_action.setEnabled(has_redo)
+        self.reset_action.setEnabled(has_original)
+
+        # Update buttons
+        if hasattr(self, "undo_btn"):
+            self.undo_btn.setEnabled(has_undo)
+        if hasattr(self, "redo_btn"):
+            self.redo_btn.setEnabled(has_redo)
+        if hasattr(self, "reset_original_btn"):
+            self.reset_original_btn.setEnabled(has_original)
 
     # --- History controls ----------------------------------------------------
     def undo_change(self) -> None:
@@ -1097,6 +1269,34 @@ class MainWindow(QMainWindow):
         self.adjustment_controls.extend([label, slider])
         return slider, label
 
+    def _add_factor_slider_with_icon(self, parent_layout: QVBoxLayout, field: str, title: str, icon_name: str) -> tuple[QSlider, QLabel]:
+        """Add a factor slider with icon instead of text label."""
+        container = QHBoxLayout()
+        container.setSpacing(4)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(qta.icon(icon_name, color="#666").pixmap(20, 20))
+        icon_label.setFixedWidth(24)
+        icon_label.setToolTip(title)
+        container.addWidget(icon_label)
+
+        value_label = QLabel("1.00")
+        value_label.setFixedWidth(35)
+        container.addWidget(value_label)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(20, 200)
+        slider.setValue(100)
+        slider.valueChanged.connect(
+            lambda val, lbl=value_label, fld=field, ttl=title: self._on_factor_slider_change(fld, ttl, val, lbl)
+        )
+        slider.sliderReleased.connect(lambda ttl=title: self._commit_factor_state(ttl))
+        container.addWidget(slider)
+
+        parent_layout.addLayout(container)
+        self.adjustment_controls.extend([value_label, slider])
+        return slider, value_label
+
     def _slider_to_factor(self, slider_value: int) -> float:
         return round(slider_value / 100.0, 2)
 
@@ -1118,7 +1318,7 @@ class MainWindow(QMainWindow):
         slider.blockSignals(True)
         slider.setValue(self._factor_to_slider(value))
         slider.blockSignals(False)
-        label.setText(f"{title}: {value:.2f}")
+        label.setText(f"{value:.2f}")
 
     def _prepare_export_base_image(self) -> Image.Image:
         """Return the current base image for export."""
@@ -1236,7 +1436,13 @@ class MainWindow(QMainWindow):
             suggested_path=suggested_path,
         )
 
-        if dialog.exec() != dialog.Accepted or not dialog.result:
+        self._append_status("=== Save As Dialog geöffnet ===")
+        exec_result = dialog.exec()
+        self._append_status(f"Dialog exec() Ergebnis: {exec_result} (Accepted={QDialog.DialogCode.Accepted})")
+        self._append_status(f"Dialog result Objekt: {dialog.result}")
+
+        if exec_result != QDialog.DialogCode.Accepted or not dialog.result:
+            self._append_status("Dialog abgebrochen oder kein Ergebnis")
             return
 
         result = dialog.result
@@ -1244,14 +1450,18 @@ class MainWindow(QMainWindow):
         self._append_status(f"Auflösung: {result.width}x{result.height}, Format: {result.format.upper()}")
 
         # Prepare image
+        self._append_status("Bereite Bild für Export vor...")
         if self.current_adjusted_image:
             source_image = self.current_adjusted_image
+            self._append_status(f"Verwende aktuell angepasstes Bild: {source_image.width}x{source_image.height}")
         else:
+            self._append_status("Wende Anpassungen auf Basisbild an...")
             source_image = apply_adjustments(
                 self.session.current_base(),
                 self.adjustment_controller.state
             )
             self.current_adjusted_image = source_image
+            self._append_status(f"Angepasstes Bild erstellt: {source_image.width}x{source_image.height}")
 
         # Resize if needed
         if result.width != source_image.width or result.height != source_image.height:
@@ -1261,27 +1471,35 @@ class MainWindow(QMainWindow):
                 target_width=result.width,
                 target_height=result.height,
             )
+            self._append_status(f"✓ Skalierung abgeschlossen: {output_image.width}x{output_image.height}")
         else:
             output_image = source_image.copy()
+            self._append_status("Keine Skalierung nötig, verwende Original-Auflösung")
 
         # Save with correct format
         try:
+            self._append_status(f"Erstelle Zielverzeichnis: {result.path.parent}")
             result.path.parent.mkdir(parents=True, exist_ok=True)
 
             save_kwargs = {}
             if result.format == "webp":
                 save_kwargs = {"quality": self.settings.export.quality, "method": 6}
+                self._append_status(f"Format: WebP, Quality={self.settings.export.quality}")
             elif result.format == "jpeg":
                 save_kwargs = {"quality": self.settings.export.quality}
+                self._append_status(f"Format: JPEG, Quality={self.settings.export.quality}")
             elif result.format == "png":
                 save_kwargs = {"compress_level": 6}
+                self._append_status("Format: PNG, Compress Level=6")
 
             # Convert to RGB for JPEG if needed
             if result.format == "jpeg" and output_image.mode == "RGBA":
+                self._append_status("Konvertiere RGBA zu RGB für JPEG...")
                 output_image = output_image.convert("RGB")
 
+            self._append_status(f"Speichere Datei: {result.path}")
             output_image.save(result.path, **save_kwargs)
-            self._append_status(f"✓ Gespeichert: {result.path}")
+            self._append_status(f"✓ Datei erfolgreich gespeichert: {result.path}")
             self.status_bar.showMessage(f"Gespeichert: {result.path.name}", 7000)
 
             # Update last exported paths and enable results viewer
@@ -1290,7 +1508,9 @@ class MainWindow(QMainWindow):
                 self.view_results_btn.setEnabled(True)
 
         except Exception as exc:
+            self.logger.exception("Fehler beim Speichern")
             self._show_error(f"Fehler beim Speichern: {exc}")
+            self._append_status(f"✗ Fehler: {exc}")
 
     # --- Image Navigation ---------------------------------------------------
     def _get_sibling_images(self) -> tuple[Path | None, Path | None]:
@@ -1340,3 +1560,53 @@ class MainWindow(QMainWindow):
         _, next_path = self._get_sibling_images()
         if next_path:
             self._handle_file_drop(next_path)
+
+    # --- Recent Files/Folders -------------------------------------------------
+    def _show_recent_images_menu(self) -> None:
+        """Show dropdown menu with recent images."""
+        menu = QMenu(self)
+        recent_files = self.recent_manager.recent_files()
+
+        if not recent_files:
+            action = menu.addAction("Keine zuletzt geöffneten Bilder")
+            action.setEnabled(False)
+        else:
+            for path in recent_files:
+                action = menu.addAction(f"{path.name}  ({path.parent.name})")
+                action.setData(path)
+                action.triggered.connect(lambda checked, p=path: self._handle_file_drop(p))
+
+        # Position menu below button
+        btn = self.recent_images_btn
+        pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _show_recent_folders_menu(self) -> None:
+        """Show dropdown menu with recent folders."""
+        menu = QMenu(self)
+        recent_folders = self.recent_manager.recent_folders()
+
+        if not recent_folders:
+            action = menu.addAction("Keine zuletzt geöffneten Ordner")
+            action.setEnabled(False)
+        else:
+            for path in recent_folders:
+                action = menu.addAction(f"{path.name}  ({path.parent.name})")
+                action.setData(path)
+                action.triggered.connect(lambda checked, p=path: self._open_recent_folder(p))
+
+        # Position menu below button
+        btn = self.recent_folders_btn
+        pos = btn.mapToGlobal(btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _open_recent_folder(self, folder_path: Path) -> None:
+        """Open file browser and navigate to the folder."""
+        if not folder_path.exists():
+            self._show_error(f"Ordner existiert nicht mehr:\n{folder_path}")
+            return
+
+        # Show file browser and navigate to folder
+        self.toggle_browser_btn.setChecked(True)
+        self._toggle_file_browser(True)
+        self.file_browser.file_tree.navigate_to(folder_path)

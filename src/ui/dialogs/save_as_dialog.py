@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QFormLayout,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+import qtawesome as qta
 
 
 @dataclass
@@ -64,6 +65,23 @@ class SaveAsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
+        # Button styles matching main window
+        btn_style = """
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+        """
+
         # File path section
         path_group = QGroupBox("Speicherort")
         path_layout = QHBoxLayout(path_group)
@@ -75,8 +93,12 @@ class SaveAsDialog(QDialog):
         self.path_edit.setMinimumWidth(250)
         path_layout.addWidget(self.path_edit)
 
-        browse_btn = QPushButton("...")
-        browse_btn.setFixedWidth(30)
+        browse_btn = QPushButton()
+        browse_btn.setIcon(qta.icon("mdi6.folder-open", color="white"))
+        browse_btn.setIconSize(QSize(20, 20))
+        browse_btn.setFixedSize(36, 36)
+        browse_btn.setToolTip("Ordner wählen")
+        browse_btn.setStyleSheet(btn_style)
         browse_btn.clicked.connect(self._browse_path)
         path_layout.addWidget(browse_btn)
 
@@ -134,10 +156,13 @@ class SaveAsDialog(QDialog):
         btn_layout.addStretch()
 
         cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.setMinimumWidth(100)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
         save_btn = QPushButton("Speichern")
+        save_btn.setMinimumWidth(100)
+        save_btn.setStyleSheet(btn_style)
         save_btn.setDefault(True)
         save_btn.clicked.connect(self._on_save)
         btn_layout.addWidget(save_btn)
@@ -214,20 +239,32 @@ class SaveAsDialog(QDialog):
 
     def _on_save(self) -> None:
         """Validate and accept dialog."""
-        path = Path(self.path_edit.text())
+        from PySide6.QtWidgets import QMessageBox
 
-        # Ensure correct extension
-        format_text = self.format_combo.currentText().lower()
-        ext_map = {"webp": ".webp", "png": ".png", "jpeg": ".jpg"}
-        expected_ext = ext_map.get(format_text, ".webp")
+        try:
+            path_text = self.path_edit.text().strip()
 
-        if path.suffix.lower() not in [expected_ext, ".jpeg" if format_text == "jpeg" else expected_ext]:
-            path = path.with_suffix(expected_ext)
+            if not path_text:
+                QMessageBox.warning(self, "Fehler", "Bitte einen Dateinamen eingeben.")
+                return
 
-        self.result = SaveAsResult(
-            path=path,
-            width=self.width_spin.value(),
-            height=self.height_spin.value(),
-            format=format_text,
-        )
-        self.accept()
+            path = Path(path_text)
+
+            # Ensure correct extension
+            format_text = self.format_combo.currentText().lower()
+            ext_map = {"webp": ".webp", "png": ".png", "jpeg": ".jpg"}
+            expected_ext = ext_map.get(format_text, ".webp")
+
+            if path.suffix.lower() not in [expected_ext, ".jpeg" if format_text == "jpeg" else expected_ext]:
+                path = path.with_suffix(expected_ext)
+
+            self.result = SaveAsResult(
+                path=path,
+                width=self.width_spin.value(),
+                height=self.height_spin.value(),
+                format=format_text,
+            )
+            self.accept()
+
+        except Exception as exc:
+            QMessageBox.critical(self, "Fehler", f"Fehler beim Validieren des Pfads: {exc}")
