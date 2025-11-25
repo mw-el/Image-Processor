@@ -669,8 +669,8 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message, 5000)
 
     # --- Ratio handling ------------------------------------------------------
-    def _apply_ratio(self, ratio: float) -> bool:
-        self._append_status(f"_apply_ratio aufgerufen mit ratio={ratio:.4f}")
+    def _apply_ratio(self, ratio: float, target_width: float | None = None, target_height: float | None = None) -> bool:
+        self._append_status(f"_apply_ratio aufgerufen mit ratio={ratio:.4f}, target_size={target_width}x{target_height if target_width else 'auto'}")
         if not self.session.has_image():
             self._show_error("Bitte zuerst ein Bild laden.")
             self._append_status("✗ Fehler: Kein Bild in Session")
@@ -688,8 +688,22 @@ class MainWindow(QMainWindow):
             self._show_error("Bildbereich konnte nicht berechnet werden.")
             self._append_status("✗ Fehler: Ungültiger Bildbereich")
             return False
-        centered_rect = self._compute_centered_rect(rect, ratio)
-        self._append_status(f"Zentrierter Crop-Bereich berechnet: {centered_rect.width():.1f}x{centered_rect.height():.1f}")
+
+        # Compute centered rect - use explicit dimensions for custom ratios
+        if target_width is not None and target_height is not None:
+            # Custom ratio: scale user's dimensions to fit in canvas
+            scale = min(rect.width() / target_width, rect.height() / target_height, 1.0)
+            width = max(1, target_width * scale)
+            height = max(1, target_height * scale)
+            x = rect.center().x() - width / 2
+            y = rect.center().y() - height / 2
+            centered_rect = QRectF(x, y, width, height)
+            self._append_status(f"Custom Ratio: Skaliere {target_width}x{target_height} mit Faktor {scale:.3f}")
+        else:
+            # Preset ratio: use existing logic
+            centered_rect = self._compute_centered_rect(rect, ratio)
+
+        self._append_status(f"Crop-Bereich berechnet: {centered_rect.width():.1f}x{centered_rect.height():.1f}")
         self.canvas.crop_overlay.set_selection(centered_rect, ratio)
         self.has_ratio_selection = True
         self.logger.info("Aspect Ratio gesetzt: %.4f", ratio)
@@ -785,7 +799,10 @@ class MainWindow(QMainWindow):
             return
 
         self.session.set_ratio(label_text, ratio_value, custom_tuple)
-        if not self._apply_ratio(ratio_value):
+        # For custom ratios, pass explicit dimensions; for preset ratios, pass None
+        target_w = custom_tuple[0] if custom_tuple else None
+        target_h = custom_tuple[1] if custom_tuple else None
+        if not self._apply_ratio(ratio_value, target_width=target_w, target_height=target_h):
             self.session.clear_ratio()
             button.setChecked(False)
             self.active_ratio_button = None

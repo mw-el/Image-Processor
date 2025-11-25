@@ -124,6 +124,7 @@ Lokale Desktop-App zur Bildbearbeitung und Export mehrerer WebP-Varianten mit ra
 - 2025-11-25 18:35 CET – Save As Dialog UI: Ordner-Icon, blaue Button-Farben (#2196F3), Tooltips.
 - 2025-11-25 18:40 CET – Auto-Balance Icons: Zauberstab-Icons für Auto 1/2/3 Modi implementiert.
 - 2025-11-25 18:45 CET – Debug-Logging: Umfangreiches Status-Log für Crop- und Save-Operationen zur Fehlerdiagnose.
+- 2025-11-25 19:00 CET – Variable Aspect Ratio komplett behoben: _apply_ratio() akzeptiert jetzt optionale target_width/target_height für korrekte Custom-Ratio-Skalierung.
 
 ## Bekannte Bugs / Offene Punkte
 
@@ -156,20 +157,20 @@ Lokale Desktop-App zur Bildbearbeitung und Export mehrerer WebP-Varianten mit ra
 
 **Verbesserung**: Auto 1, Auto 2, Auto 3 Modi zeigen jetzt Zauberstab-Icons (fa5s.magic) mit weißer Farbe.
 
-### BEKANNTES PROBLEM: Variable Aspect Ratio (?:?) zeigt inkonsistent Crop-Rahmen
+### Behoben: Variable Aspect Ratio (?:?) zeigt inkonsistent Crop-Rahmen
 
-**Status**: Teilweise behoben, bleibt offen (2025-11-25)
+**Status**: Behoben (2025-11-25)
 
-**Problem**: Bei Eingabe eigener Aspect Ratios im "?:?"-Dialog erscheint der Crop-Rahmen manchmal nicht oder inkonsistent.
+**Problem**: Bei Eingabe eigener Aspect Ratios im "?:?"-Dialog erscheint der Crop-Rahmen manchmal nicht oder inkonsistent. Für extreme Ratios produzierte der Code nahezu null-dimensionale Rechtecke.
 
-**Bisherige Fixes**:
-- `_enter_crop_mode()` zeigt jetzt Basisbild korrekt an (main_window.py:797)
-- `crop_overlay.set_selection()` ruft explizit `self.show()` auf (crop_overlay.py:52)
-- Umfangreiches Debug-Logging im Status-Fenster
+**Root Cause**: Die Custom-Ratio-Logik übergab nur das Verhältnis (ratio) an `_apply_ratio()`, nicht aber die vom Nutzer eingegebenen Breiten-/Höhen-Werte. Das initiale Crop-Rechteck wurde aus den kompletten Bildbereichen berechnet, was bei extremen Verhältnissen zu sehr kleinen oder nicht sichtbaren Rahmen führte.
 
-**Verbleibendes Issue**: Trotz Fixes erscheint der Rahmen nicht konsistent. Weitere Untersuchung nötig, aber **niedrige Priorität**, da:
-- Save As Dialog (wichtiger) jetzt funktioniert
-- Voreingestellte Ratios (1:1, 2:3, 3:4, 16:9, etc.) funktionieren einwandfrei
-- Workaround: Nutzer können voreingestellte Ratios verwenden
+**Lösung**:
 
-**Debug-Hinweise**: Status-Log zeigt detaillierte Meldungen für Custom Ratio Dialog, _apply_ratio, Canvas-Bereiche und Overlay-Aktivierung.
+1. `_apply_ratio()` erweitert um optionale Parameter `target_width` und `target_height` (main_window.py:672-711)
+2. Wenn Custom-Ratio-Dimensionen übergeben werden, werden diese auf Canvas-Größe skaliert
+3. Skalierungsfaktor: `scale = min(rect.width() / target_width, rect.height() / target_height, 1.0)`
+4. `_ratio_button_clicked()` übergibt jetzt die expliziten Custom-Dimensionen an `_apply_ratio()` (main_window.py:802-805)
+5. Voreingestellte Ratios (1:1, 2:3, etc.) verwenden weiterhin die bisherige Logik über `_compute_centered_rect()`
+
+**Ergebnis**: Custom Aspect Ratios zeigen jetzt konsistent einen korrekt skalierten Crop-Rahmen, unabhängig von der Eingabe.

@@ -78,5 +78,6 @@ update-desktop-database ~/.local/share/applications
   - Save As UI verbessert (Ordner-Icon, einheitliche Blautöne, Tooltips)
   - Auto 1/2/3 mit Zauberstab-Icons
   - Umfangreiches Debug-Logging im Status-Fenster
+  - Variable Aspect Ratio (?:?) komplett behoben: Custom-Ratios skalieren jetzt korrekt auf Canvas-Größe
 
 Für detaillierte Phasen siehe `docs/development_plan.md`.
