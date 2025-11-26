@@ -68,3 +68,16 @@ class FileTreeView(QTreeView):
 
         self.model.setRootPath(str(path))
         self.setRootIndex(self.model.index(str(path)))
+
+    def navigate_to(self, path: Path) -> None:
+        """Navigate to and select a specific directory."""
+        if not path.exists() or not path.is_dir():
+            return
+
+        index = self.model.index(str(path))
+        if index.isValid():
+            self.setCurrentIndex(index)
+            self.scrollTo(index)
+            self.expand(index)
+            # Emit signal to load thumbnails
+            self.directory_selected.emit(path)

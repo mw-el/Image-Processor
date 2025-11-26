@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+.cache/
+*.cache
+thumbnail_cache/
+cache/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+.~*
+
+# OS specific
+.directory
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Test coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Media files (examples)
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tiff
+
+# Documents (examples)
+*.txt
+ESRGAN*
+matthias-vortrag*
+_matthias-vortrag*
+__matthias-vortrag*
+
+# Models
+models/
+
+# Local settings
+local_settings.py

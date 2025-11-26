@@ -12,4 +12,5 @@
 - Weitere Plattformtests (macOS/Windows) stehen noch aus.
 - Langfristig kann ein Setting-Editor integriert werden.
 
+
 Review durchgeführt am 2025-11-16.

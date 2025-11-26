@@ -12,11 +12,17 @@ class RatioSelection:
 
 
 class CustomRatioDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, default_width: float = 0, default_height: float = 0) -> None:
         super().__init__(parent)
         self.setWindowTitle("Eigene Aspect Ratio")
         self._width_input = QLineEdit()
         self._height_input = QLineEdit()
+
+        # Pre-fill with last used values if provided
+        if default_width > 0:
+            self._width_input.setText(str(int(default_width)))
+        if default_height > 0:
+            self._height_input.setText(str(int(default_height)))
 
         layout = QFormLayout(self)
         layout.addRow("Breite", self._width_input)

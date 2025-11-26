@@ -7,6 +7,7 @@ Dieser Plan deckt die End-to-End-Szenarien ab, die vor einem Release durchgespie
 2. `python -m src.app` ohne Argument starten – Fenster sollte erscheinen, Statusbar meldet „Bereit“.
 3. CLI-Start mit Datei: `python -m src.app example.jpg` – Bild muss sofort geladen sein.
 4. Desktop-Integration: `./scripts/install_desktop.sh "$PWD/.venv/bin/python -m src.app"`, danach per Dateimanager ein Bild via Doppelklick öffnen.
+5. KI-Modelle verifizieren: `python scripts/verify_models.py` (sollte „Alle Modelle ... vorhanden“ melden; bei Fehlschlag fehlende Assets nachrüsten).
 
 ## 2. Zuschneiden & Varianten
 1. Bild via Drag & Drop laden.
