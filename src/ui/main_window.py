@@ -597,7 +597,7 @@ class MainWindow(QMainWindow):
 
         # Export variants: multiple resolutions
         self.save_changes_btn = QPushButton()
-        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save-multiple", color="white"))
+        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save-all", color="white"))
         self.save_changes_btn.setIconSize(QSize(24, 24))
         self.save_changes_btn.setToolTip("Varianten speichern (mehrere Auflösungen)")
         self.save_changes_btn.setFixedSize(btn_size, btn_size)
