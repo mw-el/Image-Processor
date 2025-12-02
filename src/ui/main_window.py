@@ -1782,15 +1782,21 @@ class MainWindow(QMainWindow):
             self._show_error("Bitte zuerst ein Bild laden.")
             return
 
+        # Apply crop if ratio selection is active
+        if self.has_ratio_selection and self.current_adjusted_image is None:
+            self.apply_crop()
+
+        # Prepare image: apply adjustments if not already done
         if self.current_adjusted_image is None:
-            if self.has_ratio_selection:
-                self.apply_crop()
-            else:
-                self._show_error("Keine Änderungen zum Speichern vorhanden.")
+            try:
+                image_to_save = self.session.apply_adjustments(self.adjustment_controller.state)
+            except Exception as exc:
+                self._show_error(f"Fehler beim Anwenden der Anpassungen: {exc}")
                 return
+        else:
+            image_to_save = self.current_adjusted_image
 
         target_path = self.image_store.current.path
-        image_to_save = self.current_adjusted_image
 
         # Confirm overwrite
         confirm = QMessageBox.question(
