@@ -12,6 +12,7 @@ from ...core.thumbnail_cache import ThumbnailCache
 from ...core.image_metadata import extract_image_metadata
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
+COMFY_START_SCRIPT = Path.home() / "_AA_ComfyUI" / "start-gui.sh"
 
 
 class ThumbnailLoader(QObject):
@@ -169,6 +170,11 @@ class ThumbnailGridView(QListWidget):
         show_in_fm_action.triggered.connect(lambda: self._show_in_file_manager(image_path))
         menu.addAction(show_in_fm_action)
 
+        if COMFY_START_SCRIPT.exists():
+            open_comfy_action = QAction("In ComfyUI laden", self)
+            open_comfy_action.triggered.connect(lambda: self._open_in_comfyui(image_path))
+            menu.addAction(open_comfy_action)
+
         # Show menu at cursor position
         menu.exec(event.globalPos())
 
@@ -179,6 +185,14 @@ class ThumbnailGridView(QListWidget):
             subprocess.Popen(['xdg-open', str(image_path.parent)])
         except Exception:
             # Fail Fast: Silently ignore if file manager can't be opened
+            pass
+
+    def _open_in_comfyui(self, image_path: Path) -> None:
+        """Launch ComfyUI GUI with the image preloaded (if available)."""
+        try:
+            subprocess.Popen([str(COMFY_START_SCRIPT), "--load-image", str(image_path)])
+        except Exception:
+            # Fail fast: do not block UI on launch issues
             pass
 
     def _path_for_item(self, item: QListWidgetItem) -> Optional[Path]:

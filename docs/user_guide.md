@@ -21,6 +21,98 @@ update-desktop-database ~/.local/share/applications
 ./start_image_processor.sh [optional/path/zum/bild]
 ```
 
+## 3. Kommandozeilen-Aufrufe (CLI)
+
+Die App kann programmgesteuert mit verschiedenen Modi und Bildern gestartet werden:
+
+### Syntax
+```bash
+python -m src.app [BILD] [OPTIONS]
+```
+
+### Parameter
+- `BILD` (optional): Pfad zu einer Bilddatei zum Laden beim Start (supports `~` expansion)
+- `-v, --view {single|gallery}`: Startansicht (Standard: `single`)
+
+### Beispiele
+
+#### 1. Nur App öffnen (leer)
+```bash
+python -m src.app
+```
+→ App startet ohne geladenes Bild in Single-View
+
+#### 2. Bild in Single-View öffnen
+```bash
+python -m src.app ~/Pictures/photo.jpg
+```
+→ Bild wird geladen, Single-View aktiv (Standard)
+
+#### 3. Bild in Gallery-View öffnen
+```bash
+python -m src.app ~/Pictures/photo.jpg --view gallery
+python -m src.app ~/Pictures/photo.jpg -v gallery  # Kurzform
+```
+→ Bild wird geladen → Gallery-View aktiviert sich nach ~100ms
+→ Ganzer Ordner wird als Thumbnail-Grid angezeigt
+
+#### 4. Nur Gallery-View (kein Bild)
+```bash
+python -m src.app --view gallery
+```
+→ App öffnet in leerer Gallery-View, keine Datei vorgeladen
+
+### Praktische Anwendungsfälle
+
+**Batch-Bearbeitung aus Terminal:**
+```bash
+# Mehrere Bilder schnell nacheinander in Gallery-View öffnen
+for img in ~/Pictures/*.jpg; do
+  python -m src.app "$img" -v gallery
+done
+```
+
+**File Manager Integration (via .desktop file):**
+```ini
+[Desktop Entry]
+Name=AA Image Processor (Gallery)
+Exec=python -m src.app %F --view gallery
+MimeType=image/jpeg;image/png;image/webp;
+Type=Application
+```
+
+**Alias im Shell-Profil (~/.bashrc oder ~/.zshrc):**
+```bash
+alias img='python -m src.app'
+alias img-gal='python -m src.app --view gallery'
+
+# Verwendung:
+img ~/Pictures/photo.jpg
+img-gal ~/Pictures/photo.jpg
+```
+
+### Interne Funktionsweise
+
+Die CLI-Verarbeitung erfolgt in `src/app.py`:
+
+1. **Argumente parsen** (`_parse_args()`)
+   - `image`: Bilddatei-Pfad
+   - `--view`: single oder gallery
+
+2. **Pfad validieren**
+   - `expanduser()`: `~` → `/home/user/`
+   - Existenz-Check: ungültige Pfade → None
+
+3. **MainWindow initialisieren** (`MainWindow.__init__()`)
+   - `initial_path`: zu ladende Datei
+   - `initial_view`: Startansicht ("single" oder "gallery")
+
+4. **Nach UI-Setup** (`_open_initial_image()`)
+   - Falls `initial_path` vorhanden: `_handle_file_drop(path)` → Bild laden
+   - Falls `initial_view == "gallery"`: `QTimer.singleShot(100, _set_view_mode("gallery"))` → View wechseln
+
+---
+
 ## 3. Bedienoberfläche
 
 ### File Browser (links, ein-/ausblendbar)
