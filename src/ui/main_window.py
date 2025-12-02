@@ -1397,9 +1397,11 @@ class MainWindow(QMainWindow):
 
         self.info_dialog = QDialog(self)
         self.info_dialog.setWindowTitle(title)
+        self.info_dialog.setWindowModality(Qt.WindowModality.NonModal)  # Allow main window interaction
         layout = QVBoxLayout(self.info_dialog)
         text_widget = QPlainTextEdit()
         text_widget.setReadOnly(True)
+        text_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # Don't steal focus from gallery
         text_widget.setPlainText(info_text)
         layout.addWidget(text_widget)
         self.info_dialog.resize(380, 560)
@@ -1505,10 +1507,10 @@ class MainWindow(QMainWindow):
             dialog_height = dialog.height()
             # Top-left of main window in global coords
             top_left = self.mapToGlobal(self.rect().topLeft())
-            # Place near right control column, slightly below top buttons
+            # Place near right control column, further down and left to avoid overlap
             margin = 12
-            x = top_left.x() + self.width() - self.controls_width + margin
-            y = top_left.y() + 90  # below top button rows
+            x = top_left.x() + self.width() - self.controls_width + margin - 30  # 30px more to the left
+            y = top_left.y() + 150  # 60px further down to clear top buttons
             dialog.move(max(0, x), max(0, y))
         except Exception:
             pass
