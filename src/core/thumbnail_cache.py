@@ -20,7 +20,8 @@ class ThumbnailCache:
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
         if cache_dir is None:
-            cache_dir = Path.home() / ".cache" / "thumbnails" / "normal"
+            # Use project-local cache to avoid permission issues outside workspace
+            cache_dir = Path(__file__).resolve().parents[2] / ".cache" / "thumbnails" / "normal"
 
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)

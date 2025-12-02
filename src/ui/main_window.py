@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QAbstractItemView,
     QApplication,
     QLabel,
     QMainWindow,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSizePolicy,
     QStatusBar,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -51,6 +53,7 @@ from .dialogs.save_as_dialog import SaveAsDialog
 from .controllers.zoom_controller import ZoomController
 from .views.image_canvas import ImageCanvas
 from .components.file_browser_sidebar import FileBrowserSidebar
+from .components.thumbnail_grid import ThumbnailGridView
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 
@@ -89,13 +92,18 @@ class MainWindow(QMainWindow):
         self.custom_ratio_tuple: tuple[float, float] | None = None
         self.custom_ratio_button: QPushButton | None = None
         self.current_image_path: Path | None = None
+        self.current_folder: Path | None = None
         self.current_adjusted_image: Image.Image | None = None
         self.metadata_text = ""
         self.metadata_dirty = False
+        self.loaded_metadata: dict[str, str] = {}
+        self.current_resolution: tuple[int, int] = (0, 0)
+        self.info_dialog: QDialog | None = None
         self.crop_geometry: CropGeometry | None = None
         self.last_exported_paths: list[Path] = []
         self.balance_mode: int = 0  # 0=none, 1=photoshop, 2=conservative, 3=color-only
         self.recent_manager = RecentManager()
+        self.view_mode = "single"
 
         self.setWindowTitle("AA Image Processor")
         self.resize(1580, 900)  # +300px for browser sidebar
@@ -183,40 +191,6 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(8, 8, 8, 8)
         root_layout.setSpacing(12)
 
-        self.canvas = ImageCanvas()
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.canvas.navigate_previous.connect(self._navigate_to_previous_image)
-        self.canvas.navigate_next.connect(self._navigate_to_next_image)
-        self.canvas.crop_overlay.crop_requested.connect(self.apply_crop)
-
-        canvas_container = QWidget()
-        canvas_container_layout = QVBoxLayout(canvas_container)
-        canvas_container_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_container_layout.setSpacing(6)
-        canvas_container_layout.addWidget(self.canvas, stretch=1)
-
-        zoom_layout = QHBoxLayout()
-        zoom_layout.setContentsMargins(0, 0, 0, 0)
-        zoom_layout.setSpacing(6)
-        self.zoom_label = QLabel("Zoom: 100%")
-        self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setRange(10, 200)
-        self.zoom_slider.setValue(100)
-        zoom_layout.addWidget(self.zoom_label)
-        zoom_layout.addWidget(self.zoom_slider, stretch=1)
-        canvas_container_layout.addLayout(zoom_layout)
-
-        root_layout.addWidget(canvas_container, stretch=3)
-        self.zoom_controller = ZoomController(self.canvas, self.zoom_slider, self.zoom_label)
-        self.zoom_controller.set_enabled(False)
-
-        self.controls_width = 360
-        controls_widget = QWidget()
-        controls_widget.setFixedWidth(self.controls_width)
-        controls_layout = QVBoxLayout(controls_widget)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(6)
-
         # Common button styles - icons always white
         self.btn_style_normal = """
             QPushButton {
@@ -263,6 +237,78 @@ class MainWindow(QMainWindow):
                 color: white;
             }
         """
+
+        self.canvas = ImageCanvas()
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.navigate_previous.connect(self._navigate_to_previous_image)
+        self.canvas.navigate_next.connect(self._navigate_to_next_image)
+        self.canvas.crop_overlay.crop_requested.connect(self.apply_crop)
+
+        single_view_container = QWidget()
+        single_view_layout = QVBoxLayout(single_view_container)
+        single_view_layout.setContentsMargins(0, 0, 0, 0)
+        single_view_layout.setSpacing(6)
+        single_view_layout.addWidget(self.canvas, stretch=1)
+
+        zoom_layout = QHBoxLayout()
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(6)
+        self.zoom_label = QLabel("Zoom: 100%")
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(10, 200)
+        self.zoom_slider.setValue(100)
+        zoom_layout.addWidget(self.zoom_label)
+        zoom_layout.addWidget(self.zoom_slider, stretch=1)
+        single_view_layout.addLayout(zoom_layout)
+
+        # === Gallery view ===
+        self.gallery_grid = ThumbnailGridView()
+        self.gallery_grid.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.gallery_grid.itemSelectionChanged.connect(self._update_gallery_selection_state)
+        self.gallery_grid.itemDoubleClicked.connect(self._open_image_from_gallery_item)
+
+        gallery_toolbar = QHBoxLayout()
+        gallery_toolbar.setContentsMargins(0, 0, 0, 0)
+        gallery_toolbar.setSpacing(8)
+        self.gallery_title_label = QLabel("Keine Galerie geladen")
+        gallery_toolbar.addWidget(self.gallery_title_label)
+        gallery_toolbar.addStretch()
+        self.gallery_selection_label = QLabel("")
+        gallery_toolbar.addWidget(self.gallery_selection_label)
+        self.gallery_count_label = QLabel("")
+        gallery_toolbar.addWidget(self.gallery_count_label)
+        self.delete_selected_btn = QPushButton("Delete Selected")
+        self.delete_selected_btn.setIcon(qta.icon("mdi6.delete", color="white"))
+        self.delete_selected_btn.setIconSize(QSize(20, 20))
+        self.delete_selected_btn.setFixedHeight(32)
+        self.delete_selected_btn.setStyleSheet(self.btn_style_normal)
+        self.delete_selected_btn.setEnabled(False)
+        self.delete_selected_btn.clicked.connect(self._delete_selected_images)
+        gallery_toolbar.addWidget(self.delete_selected_btn)
+
+        gallery_container = QWidget()
+        gallery_layout = QVBoxLayout(gallery_container)
+        gallery_layout.setContentsMargins(0, 0, 0, 0)
+        gallery_layout.setSpacing(6)
+        gallery_layout.addLayout(gallery_toolbar)
+        gallery_layout.addWidget(self.gallery_grid, stretch=1)
+
+        # Stack for switching between single view and gallery
+        self.viewer_stack = QStackedWidget()
+        self.viewer_stack.addWidget(single_view_container)  # index 0
+        self.viewer_stack.addWidget(gallery_container)     # index 1
+        self.viewer_stack.setCurrentIndex(0)
+
+        root_layout.addWidget(self.viewer_stack, stretch=3)
+        self.zoom_controller = ZoomController(self.canvas, self.zoom_slider, self.zoom_label)
+        self.zoom_controller.set_enabled(False)
+
+        self.controls_width = 360
+        controls_widget = QWidget()
+        controls_widget.setFixedWidth(self.controls_width)
+        controls_layout = QVBoxLayout(controls_widget)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(6)
 
         self.adjustment_controls: list[QWidget] = []
         btn_size = 40  # Square button size for icon buttons
@@ -365,6 +411,33 @@ class MainWindow(QMainWindow):
         ratio_grid = QGridLayout()
         ratio_grid.setSpacing(6)
         self.ratio_buttons: dict[str, QPushButton] = {}
+        ratio_button_width = int(self.controls_width / 5) - 4
+
+        # View toggle buttons (left column)
+        self.single_view_btn = QPushButton()
+        self.single_view_btn.setIcon(qta.icon("mdi6.image-outline", color="white"))
+        self.single_view_btn.setIconSize(QSize(20, 20))
+        self.single_view_btn.setToolTip("Einzelansicht")
+        self.single_view_btn.setCheckable(True)
+        self.single_view_btn.setChecked(True)
+        self.single_view_btn.setFixedWidth(ratio_button_width)
+        self.single_view_btn.setFixedHeight(32)
+        self.single_view_btn.setStyleSheet(self.btn_style_checkable)
+        self.single_view_btn.clicked.connect(lambda: self._set_view_mode("single"))
+        ratio_grid.addWidget(self.single_view_btn, 0, 0)
+
+        self.gallery_view_btn = QPushButton()
+        self.gallery_view_btn.setIcon(qta.icon("mdi6.view-grid-outline", color="white"))
+        self.gallery_view_btn.setIconSize(QSize(20, 20))
+        self.gallery_view_btn.setToolTip("Galerieansicht")
+        self.gallery_view_btn.setCheckable(True)
+        self.gallery_view_btn.setChecked(False)
+        self.gallery_view_btn.setFixedWidth(ratio_button_width)
+        self.gallery_view_btn.setFixedHeight(32)
+        self.gallery_view_btn.setStyleSheet(self.btn_style_checkable)
+        self.gallery_view_btn.clicked.connect(lambda: self._set_view_mode("gallery"))
+        ratio_grid.addWidget(self.gallery_view_btn, 1, 0)
+
         ratio_defs = [
             ("1:1", 1 / 1),
             ("2:3", 2 / 3),
@@ -378,12 +451,12 @@ class MainWindow(QMainWindow):
         for idx, (label, ratio) in enumerate(ratio_defs):
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setFixedWidth(int(self.controls_width / 4) - 4)
-            btn.setFixedHeight(36)
+            btn.setFixedWidth(ratio_button_width)
+            btn.setFixedHeight(32)
             btn.setStyleSheet(self.btn_style_checkable)
             btn.clicked.connect(lambda checked, b=btn, lbl=label, r=ratio: self._ratio_button_clicked(b, lbl, r))
             row = idx // 4
-            col = idx % 4
+            col = (idx % 4) + 1
             ratio_grid.addWidget(btn, row, col)
             self.ratio_buttons[label] = btn
             if label == "?:?":
@@ -497,26 +570,11 @@ class MainWindow(QMainWindow):
         # Stretch to push save buttons to bottom
         image_controls_layout.addStretch()
 
-        # === Metadata section ===
-        metadata_layout = QVBoxLayout()
-        metadata_layout.setSpacing(2)
-        self.metadata_name_label = QLabel("Datei: -")
-        self.metadata_resolution_label = QLabel("Auflösung: -")
-        metadata_layout.addWidget(self.metadata_name_label)
-        metadata_layout.addWidget(self.metadata_resolution_label)
-        self.metadata_edit = QPlainTextEdit()
-        self.metadata_edit.setPlaceholderText("Metadaten im Format key=value pro Zeile")
-        self.metadata_edit.setFixedHeight(100)
-        self.metadata_edit.textChanged.connect(self._metadata_changed)
-        metadata_layout.addWidget(self.metadata_edit)
-        image_controls_layout.addLayout(metadata_layout)
-
         # === Status log ===
-        self.status_log = QPlainTextEdit()
-        self.status_log.setReadOnly(True)
-        self.status_log.setFixedHeight(80)
-        self.status_log.setPlaceholderText("Statusmeldungen…")
-        image_controls_layout.addWidget(self.status_log)
+        # === Filename display ===
+        self.filename_label = QLabel("-")
+        self.filename_label.setStyleSheet("font-weight: bold;")
+        image_controls_layout.addWidget(self.filename_label)
 
         # === Save buttons ===
         save_row = QHBoxLayout()
@@ -552,11 +610,19 @@ class MainWindow(QMainWindow):
         self.view_results_btn.clicked.connect(self._show_results_viewer)
         save_row.addWidget(self.view_results_btn)
 
+        self.info_btn = QPushButton()
+        self.info_btn.setIcon(qta.icon("mdi6.information", color="white"))
+        self.info_btn.setIconSize(QSize(24, 24))
+        self.info_btn.setToolTip("Datei- und Metadaten anzeigen")
+        self.info_btn.setFixedSize(btn_size, btn_size)
+        self.info_btn.setStyleSheet(self.btn_style_normal)
+        self.info_btn.clicked.connect(self._show_image_info_dialog)
+        save_row.addWidget(self.info_btn)
+        self.adjustment_controls.append(self.info_btn)
+
         save_row.addStretch()
         image_controls_layout.addLayout(save_row)
 
-        # Hide image controls until image is loaded
-        self.image_controls_container.hide()
         controls_layout.addWidget(self.image_controls_container, stretch=1)
 
         # Add stretch at end to push file_row to top when containers are hidden
@@ -604,6 +670,7 @@ class MainWindow(QMainWindow):
         except ImageSessionError as exc:
             self._show_error(str(exc))
             return
+        self.current_folder = path.parent
         self.current_adjusted_image = image.copy()
         self.canvas.display_pil_image(image)
         self.zoom_controller.reset()
@@ -622,11 +689,14 @@ class MainWindow(QMainWindow):
         self.recent_manager.add_file(path)
         self.recent_manager.add_folder(path.parent)
         self._update_navigation_buttons()
+        self._set_view_mode("single")
+        self._refresh_gallery_from_current_image(load=True)
 
         # Hide browser and show image controls after loading image
         self.toggle_browser_btn.setChecked(False)
-        self.file_browser.hide()
-        self.image_controls_container.show()
+        if hasattr(self, "toggle_browser_action"):
+            self.toggle_browser_action.setChecked(False)
+        self._toggle_file_browser(False)
 
     def _open_initial_image(self, path: Path) -> None:
         if not path.exists():
@@ -899,7 +969,7 @@ class MainWindow(QMainWindow):
                         "temperature": snapshot.temperature,
                     },
                     "current_image": image.copy(),
-                    "metadata_text": self.metadata_edit.toPlainText() if hasattr(self, "metadata_edit") else "",
+                    "metadata_text": self.metadata_text,
                     "crop_geometry": self.crop_geometry.to_payload() if self.crop_geometry else None,
                 },
             )
@@ -1020,11 +1090,11 @@ class MainWindow(QMainWindow):
     def _toggle_file_browser(self, checked: bool) -> None:
         """Toggle between file browser and image controls."""
         self.file_browser.setVisible(checked)
-        # Only show image controls if browser hidden AND image loaded
-        if not checked and self.session.has_image():
-            self.image_controls_container.show()
-        else:
+        if checked:
             self.image_controls_container.hide()
+        else:
+            self.file_browser.hide()
+            self.image_controls_container.show()
 
     def _toggle_sliders_visibility(self, checked: bool) -> None:
         """Toggle slider container visibility (accordion)."""
@@ -1033,6 +1103,137 @@ class MainWindow(QMainWindow):
             self.expand_sliders_btn.setIcon(qta.icon("mdi6.chevron-up", color="white"))
         else:
             self.expand_sliders_btn.setIcon(qta.icon("mdi6.chevron-down", color="white"))
+
+    # --- View mode + Gallery -------------------------------------------------
+    def _set_view_mode(self, mode: str) -> None:
+        """Switch between single image view and gallery view."""
+        if mode not in {"single", "gallery"}:
+            return
+
+        self.view_mode = mode
+        if mode == "single":
+            self.viewer_stack.setCurrentIndex(0)
+            self._sync_view_toggle_buttons(single_selected=True)
+        else:
+            self.viewer_stack.setCurrentIndex(1)
+            self._sync_view_toggle_buttons(single_selected=False)
+            self._refresh_gallery_from_current_image(load=True)
+
+    def _sync_view_toggle_buttons(self, single_selected: bool) -> None:
+        """Keep view toggle buttons in sync without recursive signals."""
+        if not hasattr(self, "single_view_btn") or not hasattr(self, "gallery_view_btn"):
+            return
+        self.single_view_btn.blockSignals(True)
+        self.gallery_view_btn.blockSignals(True)
+        self.single_view_btn.setChecked(single_selected)
+        self.gallery_view_btn.setChecked(not single_selected)
+        self.single_view_btn.blockSignals(False)
+        self.gallery_view_btn.blockSignals(False)
+
+    def _refresh_gallery_from_current_image(self, load: bool | None = None) -> None:
+        """Update gallery header and optionally load thumbnails for current folder."""
+        directory: Path | None = None
+        if self.current_image_path and self.current_image_path.exists():
+            directory = self.current_image_path.parent
+        elif self.current_folder and self.current_folder.exists():
+            directory = self.current_folder
+
+        if not directory or not directory.exists():
+            self.gallery_title_label.setText("Keine Galerie geladen")
+            self.gallery_grid.clear()
+            self.gallery_selection_label.setText("")
+            self.delete_selected_btn.setEnabled(False)
+            self._append_status("Galerie: Kein gültiges Verzeichnis gefunden.")
+            return
+
+        self.gallery_title_label.setText(f"Galerie: {directory.name}")
+        should_load = load if load is not None else self.view_mode == "gallery"
+        count = 0
+        if should_load:
+            try:
+                count = self.gallery_grid.load_directory(directory)
+                self._append_status(f"Galerie geladen: {directory} ({count} Dateien)")
+            except Exception as exc:
+                self._append_status(f"Galerie konnte nicht geladen werden: {exc}")
+                count = 0
+        suffix = f" ({count} Dateien)" if count else " (0 Dateien)"
+        self.gallery_title_label.setText(f"Galerie: {directory.name}{suffix} – {directory}")
+        if count == 0:
+            self.gallery_selection_label.setText(f"Keine Bilder gefunden in {directory}")
+        else:
+            self.gallery_selection_label.setText("")
+        if hasattr(self, "gallery_count_label"):
+            self.gallery_count_label.setText(f"{count} Datei(en) im Ordner")
+        self.delete_selected_btn.setEnabled(False)
+        self.gallery_grid.viewport().update()
+
+    def _update_gallery_selection_state(self) -> None:
+        """Update selection label and delete button state based on grid selection."""
+        selection_count = len(self.gallery_grid.selectedItems())
+        if selection_count == 0:
+            self.gallery_selection_label.setText("")
+            self.delete_selected_btn.setEnabled(False)
+        else:
+            self.gallery_selection_label.setText(f"{selection_count} ausgewählt")
+            self.delete_selected_btn.setEnabled(True)
+
+    def _open_image_from_gallery_item(self, item) -> None:
+        """Open double-clicked image in single view."""
+        if not item:
+            return
+        path = self.gallery_grid.path_for_item(item)
+        if not path:
+            return
+        self._set_view_mode("single")
+        self._handle_file_drop(path)
+
+    def _delete_selected_images(self) -> None:
+        """Delete selected images from gallery view."""
+        if not hasattr(self, "gallery_grid"):
+            return
+        paths = self.gallery_grid.selected_paths()
+        if not paths:
+            return
+
+        count = len(paths)
+        confirm = QMessageBox.question(
+            self,
+            "Auswahl löschen?",
+            f"{count} Bild{'er' if count != 1 else ''} dauerhaft löschen?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        directory = self.gallery_grid.current_directory or self.current_folder
+        deleted: list[Path] = []
+        failures: list[str] = []
+
+        for path in paths:
+            try:
+                if path.exists():
+                    path.unlink()
+                deleted.append(path)
+            except Exception as exc:
+                failures.append(f"{path.name}: {exc}")
+
+        if deleted:
+            deleted_names = ", ".join(p.name for p in deleted)
+            self._append_status(f"Gelöscht: {deleted_names}")
+            if self.current_image_path and self.current_image_path in deleted:
+                was_gallery = self.view_mode == "gallery"
+                self._reset_internal_state()
+                self.current_image_path = None
+                if directory:
+                    self.current_folder = directory
+                if was_gallery:
+                    self._set_view_mode("gallery")
+
+        if failures:
+            self._show_error("Konnte nicht löschen:\n" + "\n".join(failures))
+
+        self._refresh_gallery_from_current_image(load=True)
 
     def _sync_temperature_slider(self, value: int) -> None:
         if hasattr(self, "temperature_slider"):
@@ -1074,31 +1275,28 @@ class MainWindow(QMainWindow):
             self.reset_sliders_btn.setEnabled(enabled)
 
     def _metadata_changed(self) -> None:
-        self.metadata_text = self.metadata_edit.toPlainText()
         self.metadata_dirty = True
 
     def _load_metadata_info(self, path: Path) -> None:
-        if hasattr(self, "metadata_name_label"):
-            self.metadata_name_label.setText(f"Datei: {path.name}")
         try:
             with Image.open(path) as img:
                 width, height = img.size
                 info = {str(k): str(v) for k, v in img.info.items()}
-        except Exception:
+        except Exception as exc:
+            self._append_status(f"Metadaten konnten nicht geladen werden: {exc}")
             width = height = 0
             info = {}
-        if hasattr(self, "metadata_resolution_label"):
-            self.metadata_resolution_label.setText(f"Auflösung: {width} × {height}")
+        if hasattr(self, "filename_label"):
+            self.filename_label.setText(path.name)
+        self.current_resolution = (width, height)
+        self.loaded_metadata = info
         metadata_text = "\n".join(f"{k}={v}" for k, v in info.items())
-        if hasattr(self, "metadata_edit"):
-            self.metadata_edit.blockSignals(True)
-            self.metadata_edit.setPlainText(metadata_text)
-            self.metadata_edit.blockSignals(False)
         self.metadata_text = metadata_text
         self.metadata_dirty = False
+        self._update_info_dialog()
 
     def _parse_metadata_text(self) -> dict[str, str]:
-        text = self.metadata_edit.toPlainText()
+        text = self.metadata_text or ""
         metadata: dict[str, str] = {}
         for line in text.splitlines():
             line = line.strip()
@@ -1114,6 +1312,69 @@ class MainWindow(QMainWindow):
         content = "\n".join(f"{k}={v}" for k, v in metadata.items())
         return content.encode("utf-8")
 
+    def _update_info_dialog(self) -> None:
+        """Refresh content of the info dialog if it is open."""
+        if not (self.info_dialog and self.info_dialog.isVisible() and self.current_image_path):
+            return
+        width, height = self.current_resolution
+        resolution_text = f"{width} × {height}" if width and height else "Unbekannt"
+        metadata_body = self.metadata_text.strip() if self.metadata_text else "Keine Metadaten gefunden."
+        info_text = "\n".join(
+            [
+                f"Name: {self.current_image_path.name}",
+                f"Pfad: {self.current_image_path}",
+                f"Auflösung: {resolution_text}",
+                "",
+                "Metadaten:",
+                metadata_body,
+            ]
+        )
+        edit = self.info_dialog.findChild(QPlainTextEdit)
+        if edit:
+            edit.setPlainText(info_text)
+
+    def _show_image_info_dialog(self) -> None:
+        """Display filename, path, resolution and metadata in a popup."""
+        if not self.current_image_path:
+            self._show_error("Bitte zuerst ein Bild laden.")
+            return
+
+        # Toggle: hide if already open
+        if self.info_dialog and self.info_dialog.isVisible():
+            self.info_dialog.close()
+            self._clear_info_dialog()
+            return
+
+        width, height = self.current_resolution
+        resolution_text = f"{width} × {height}" if width and height else "Unbekannt"
+        metadata_body = self.metadata_text.strip() if self.metadata_text else "Keine Metadaten gefunden."
+
+        info_text = "\n".join(
+            [
+                f"Name: {self.current_image_path.name}",
+                f"Pfad: {self.current_image_path}",
+                f"Auflösung: {resolution_text}",
+                "",
+                "Metadaten:",
+                metadata_body,
+            ]
+        )
+
+        self.info_dialog = QDialog(self)
+        self.info_dialog.setWindowTitle("Bild-Info")
+        layout = QVBoxLayout(self.info_dialog)
+        text_widget = QPlainTextEdit()
+        text_widget.setReadOnly(True)
+        text_widget.setPlainText(info_text)
+        layout.addWidget(text_widget)
+        self.info_dialog.resize(520, 420)
+        self.info_dialog.finished.connect(lambda _: self._clear_info_dialog())
+        self.info_dialog.show()
+
+    def _clear_info_dialog(self) -> None:
+        """Reset info dialog reference."""
+        self.info_dialog = None
+
     def _build_variant_specs(self, adjusted: Image.Image) -> tuple[list[tuple[str, int, int]], str]:
         return self.session.build_variant_specs(adjusted)
 
@@ -1121,6 +1382,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "status_log"):
             self.status_log.appendPlainText(message)
             self.status_log.ensureCursorVisible()
+        else:
+            print(message)
 
     def _snapshot_adjustment_state(self) -> AdjustmentState:
         state = self.adjustment_controller.state
@@ -1143,6 +1406,12 @@ class MainWindow(QMainWindow):
         self.session = ImageSession(self.settings)
         self.current_adjusted_image = None
         self.crop_geometry = None
+        self.view_mode = "single"
+        self.current_folder = None
+        self.metadata_text = ""
+        self.metadata_dirty = False
+        self.loaded_metadata = {}
+        self.current_resolution = (0, 0)
         if clear_canvas:
             self.canvas.clear()
         self.canvas.crop_overlay.clear_selection()
@@ -1155,6 +1424,28 @@ class MainWindow(QMainWindow):
         if hasattr(self, "auto_balance_btn"):
             self.auto_balance_btn.setIcon(qta.icon("fa5s.magic", color="white"))
             self.auto_balance_btn.setText("")
+        if hasattr(self, "filename_label"):
+            self.filename_label.setText("-")
+        if hasattr(self, "viewer_stack"):
+            self.viewer_stack.setCurrentIndex(0)
+        if hasattr(self, "single_view_btn") and hasattr(self, "gallery_view_btn"):
+            self.single_view_btn.blockSignals(True)
+            self.gallery_view_btn.blockSignals(True)
+            self.single_view_btn.setChecked(True)
+            self.gallery_view_btn.setChecked(False)
+            self.single_view_btn.blockSignals(False)
+            self.gallery_view_btn.blockSignals(False)
+        if hasattr(self, "gallery_grid"):
+            self.gallery_grid.clear()
+        if hasattr(self, "gallery_title_label"):
+            self.gallery_title_label.setText("Keine Galerie geladen")
+        if hasattr(self, "gallery_selection_label"):
+            self.gallery_selection_label.setText("")
+        if hasattr(self, "delete_selected_btn"):
+            self.delete_selected_btn.setEnabled(False)
+        if self.info_dialog:
+            self.info_dialog.close()
+            self.info_dialog = None
 
     def _reset_zoom_controls(self) -> None:
         if hasattr(self, "zoom_controller"):
@@ -1259,10 +1550,7 @@ class MainWindow(QMainWindow):
         enabled = self.current_adjusted_image is not None
         self._enable_save_buttons(enabled)
         meta_text = payload.get("metadata_text")
-        if meta_text is not None and hasattr(self, "metadata_edit"):
-            self.metadata_edit.blockSignals(True)
-            self.metadata_edit.setPlainText(meta_text)
-            self.metadata_edit.blockSignals(False)
+        if meta_text is not None:
             self.metadata_text = meta_text
             self.metadata_dirty = False
 
@@ -1538,14 +1826,7 @@ class MainWindow(QMainWindow):
         directory = self.current_image_path.parent
         current_name = self.current_image_path.name
 
-        # Get all image files in directory
-        image_files = []
-        for ext in SUPPORTED_EXTENSIONS:
-            image_files.extend(directory.glob(f"*{ext}"))
-            image_files.extend(directory.glob(f"*{ext.upper()}"))
-
-        # Sort by name
-        image_files = sorted(set(image_files), key=lambda p: p.name.lower())
+        image_files = self._list_image_files(directory)
 
         if not image_files:
             return None, None
@@ -1560,6 +1841,17 @@ class MainWindow(QMainWindow):
         next_path = image_files[current_idx + 1] if current_idx < len(image_files) - 1 else None
 
         return prev_path, next_path
+
+    def _list_image_files(self, directory: Path) -> list[Path]:
+        """Return sorted list of image files in directory."""
+        if not directory or not directory.exists():
+            return []
+        image_files: list[Path] = []
+        for ext in SUPPORTED_EXTENSIONS:
+            image_files.extend(directory.glob(f"*{ext}"))
+            image_files.extend(directory.glob(f"*{ext.upper()}"))
+        image_files = sorted(set(image_files), key=lambda p: p.name.lower())
+        return image_files
 
     def _update_navigation_buttons(self) -> None:
         """Update navigation button states based on available sibling images."""

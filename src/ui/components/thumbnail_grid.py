@@ -5,7 +5,7 @@ from typing import Optional, Set
 import subprocess
 
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QApplication, QMenu
-from PySide6.QtCore import Signal, Qt, QThread, QObject, QSize
+from PySide6.QtCore import Signal, Qt, QThread, QObject, QSize, QRect
 from PySide6.QtGui import QPixmap, QIcon, QAction
 
 from ...core.thumbnail_cache import ThumbnailCache
@@ -55,15 +55,21 @@ class ThumbnailGridView(QListWidget):
 
         self.cache = ThumbnailCache()
         self.current_directory: Optional[Path] = None
-        self._image_paths: dict[str, Path] = {}  # Item text -> Path mapping
+        self._item_paths: dict[int, Path] = {}  # Map item index to Path
+        self._loading_threads: list[QThread] = []
 
-        # Setup grid view
+        # Setup grid view (4x3-ish cells, responsive)
+        self.cell_size = QSize(260, 200)
         self.setViewMode(QListWidget.IconMode)
-        self.setIconSize(QSize(256, 256))
+        self.setIconSize(self.cell_size)
         self.setResizeMode(QListWidget.Adjust)
-        self.setSpacing(10)
+        self.setSpacing(12)
         self.setMovement(QListWidget.Static)
         self.setWrapping(True)
+        self.setUniformItemSizes(True)
+        self.setGridSize(QSize(self.cell_size.width() + 12, self.cell_size.height() + 32))
+        self.setWordWrap(True)
+        self.setStyleSheet("QListWidget { background: #f9f9f9; }")
 
         # Enable tooltips
         self.setMouseTracking(True)
@@ -71,68 +77,75 @@ class ThumbnailGridView(QListWidget):
         # Connect signals
         self.itemClicked.connect(self._on_item_clicked)
 
-    def load_directory(self, directory: Path) -> None:
+    def load_directory(self, directory: Path) -> int:
         """
         Load all images from directory and display thumbnails.
 
-        KISS: Simple synchronous loading (can optimize with threading later).
+        KISS: Simple synchronous loading (no cache).
         """
-        # Fail Fast: Validate
         if not directory.exists() or not directory.is_dir():
-            return
+            return 0
 
         self.current_directory = directory
         self.clear()
-        self._image_paths.clear()
+        self._item_paths.clear()
 
-        # Find all image files
-        image_files = []
+        # Collect all image files by explicit extension search
+        all_images: list[Path] = []
         for ext in SUPPORTED_EXTENSIONS:
-            image_files.extend(directory.glob(f"*{ext}"))
-            image_files.extend(directory.glob(f"*{ext.upper()}"))
+            try:
+                all_images.extend(directory.glob(f"*{ext}"))
+                all_images.extend(directory.glob(f"*{ext.upper()}"))
+            except Exception:
+                pass
 
-        # Sort by name
-        image_files.sort(key=lambda p: p.name.lower())
+        # Deduplicate and sort
+        all_images = sorted(set(all_images), key=lambda p: p.name.lower())
 
-        # Add items
-        for image_path in image_files:
-            self._add_thumbnail_item(image_path)
+        count = 0
+        for path in all_images:
+            try:
+                self._add_thumbnail_item(path)
+                count += 1
+            except Exception:
+                pass
+
+        return count
 
     def _add_thumbnail_item(self, image_path: Path) -> None:
-        """Add thumbnail item to grid (lazy loading)."""
-        # Create item
+        """Add thumbnail item to grid (sync load, no cache)."""
         item = QListWidgetItem(image_path.name)
         item.setTextAlignment(Qt.AlignCenter)
 
-        # Set tooltip with metadata
         try:
             metadata = extract_image_metadata(image_path)
             item.setToolTip(metadata.to_tooltip_html())
         except Exception:
-            # Fallback tooltip
             item.setToolTip(image_path.name)
 
-        # Load thumbnail (sync for now, can async later)
+        pixmap = None
         try:
-            thumb_path = self.cache.get_or_create_thumbnail(image_path)
-            if thumb_path and thumb_path.exists():
-                pixmap = QPixmap(str(thumb_path))
-                if not pixmap.isNull():
-                    item.setIcon(QIcon(pixmap))
+            pixmap = QPixmap(str(image_path))
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(
+                    self.cell_size,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
         except Exception:
-            # No icon if thumbnail fails
-            pass
+            pixmap = None
 
-        # Store mapping
-        self._image_paths[image_path.name] = image_path
+        if pixmap and not pixmap.isNull():
+            item.setIcon(QIcon(pixmap))
 
-        # Add to list
         self.addItem(item)
+        # Store path using item's current index
+        item_index = self.row(item)
+        self._item_paths[item_index] = image_path
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         """Handle thumbnail click."""
-        # Get path from mapping
-        image_path = self._image_paths.get(item.text())
+        image_path = self._path_for_item(item)
 
         if image_path and image_path.exists():
             # Emit signal
@@ -146,7 +159,7 @@ class ThumbnailGridView(QListWidget):
             return
 
         # Get path from mapping
-        image_path = self._image_paths.get(item.text())
+        image_path = self._path_for_item(item)
         if not image_path or not image_path.exists():
             return
 
@@ -167,3 +180,21 @@ class ThumbnailGridView(QListWidget):
         except Exception:
             # Fail Fast: Silently ignore if file manager can't be opened
             pass
+
+    def _path_for_item(self, item: QListWidgetItem) -> Optional[Path]:
+        """Return filesystem path for a QListWidgetItem."""
+        item_index = self.row(item)
+        return self._item_paths.get(item_index)
+
+    def path_for_item(self, item: QListWidgetItem) -> Optional[Path]:
+        """Public helper for consumers needing the mapped path."""
+        return self._path_for_item(item)
+
+    def selected_paths(self) -> list[Path]:
+        """Return list of Paths for the current selection."""
+        paths: list[Path] = []
+        for item in self.selectedItems():
+            path = self._path_for_item(item)
+            if path:
+                paths.append(path)
+        return paths
