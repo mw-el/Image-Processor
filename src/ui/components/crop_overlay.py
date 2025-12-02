@@ -7,6 +7,7 @@ from PySide6.QtCore import QRectF, Qt, QPointF, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QImage, QAction
 from PySide6.QtWidgets import QWidget, QLabel, QMenu
 from PIL import Image
+from .magnifier_widget import MagnifierWidget
 
 
 @dataclass
@@ -37,12 +38,8 @@ class CropOverlay(QWidget):
         self._active_handle: Optional[str] = None
         self.handle_size = 12
 
-        # Magnifier setup
-        self.magnifier_label = QLabel(self)
-        self.magnifier_label.setFrameStyle(QLabel.Box | QLabel.Plain)
-        self.magnifier_label.setLineWidth(2)
-        self.magnifier_label.hide()
-        self.magnifier_label.setStyleSheet("border: 2px solid #ff6600; background: white;")
+        # Magnifier setup (using reusable widget with 400px size)
+        self.magnifier_label = MagnifierWidget(self, size=400)
         self._canvas_image: Optional[Image.Image] = None
         self._canvas_rect: QRectF = QRectF()
         self._canvas_scale: float = 1.0
@@ -228,68 +225,11 @@ class CropOverlay(QWidget):
         super().leaveEvent(event)
 
     def _update_magnifier(self, cursor_pos) -> None:
-        """Update magnifier position and content."""
-        if not self._canvas_image or not self._canvas_rect.isValid():
-            return
-
-        # Map cursor position to image coordinates
-        local_x = cursor_pos.x() - self._canvas_rect.x()
-        local_y = cursor_pos.y() - self._canvas_rect.y()
-
-        if self._canvas_scale <= 0:
-            return
-
-        # Convert to original image coordinates
-        img_x = int(local_x / self._canvas_scale)
-        img_y = int(local_y / self._canvas_scale)
-
-        # Define magnifier size (400x400 pixels showing 1:1 scale)
-        mag_size = 400
-        crop_size = mag_size
-
-        # Calculate crop region in original image
-        left = max(0, img_x - crop_size // 2)
-        top = max(0, img_y - crop_size // 2)
-        right = min(self._canvas_image.width, left + crop_size)
-        bottom = min(self._canvas_image.height, top + crop_size)
-
-        # Adjust if we hit image boundaries
-        if right - left < crop_size:
-            left = max(0, right - crop_size)
-        if bottom - top < crop_size:
-            top = max(0, bottom - crop_size)
-
-        # Crop and display
-        try:
-            cropped = self._canvas_image.crop((left, top, right, bottom))
-
-            # Convert PIL to QPixmap
-            img_rgb = cropped.convert("RGB")
-            data = img_rgb.tobytes("raw", "RGB")
-            from PySide6.QtGui import QPixmap
-            qimage = QImage(data, img_rgb.width, img_rgb.height, img_rgb.width * 3, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimage)
-
-            self.magnifier_label.setPixmap(pixmap)
-            self.magnifier_label.resize(pixmap.size())
-
-            # Position magnifier near cursor
-            offset_x = 20
-            offset_y = 20
-
-            mag_x = int(cursor_pos.x() + offset_x)
-            mag_y = int(cursor_pos.y() + offset_y)
-
-            # Keep magnifier within overlay bounds
-            if mag_x + self.magnifier_label.width() > self.width():
-                mag_x = int(cursor_pos.x() - self.magnifier_label.width() - offset_x)
-
-            if mag_y + self.magnifier_label.height() > self.height():
-                mag_y = int(cursor_pos.y() - self.magnifier_label.height() - offset_y)
-
-            self.magnifier_label.move(mag_x, mag_y)
-            self.magnifier_label.show()
-            self.magnifier_label.raise_()
-
-        except Exception:
-            pass  # Silently ignore crop errors
+        """Update magnifier position and content using reusable widget."""
+        self.magnifier_label.update_magnifier(
+            cursor_pos,
+            self._canvas_image,
+            self._canvas_rect,
+            self._canvas_scale,
+            (self.width(), self.height())
+        )

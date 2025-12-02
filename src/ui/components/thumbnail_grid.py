@@ -5,11 +5,13 @@ from typing import Optional, Set
 import subprocess
 
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QApplication, QMenu
-from PySide6.QtCore import Signal, Qt, QThread, QObject, QSize, QRect
+from PySide6.QtCore import Signal, Qt, QThread, QObject, QSize, QRect, QRectF, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QAction
 
 from ...core.thumbnail_cache import ThumbnailCache
 from ...core.image_metadata import extract_image_metadata
+from .magnifier_widget import MagnifierWidget
+from PIL import Image
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}
 COMFY_START_SCRIPT = Path.home() / "_AA_ComfyUI" / "start-gui.sh"
@@ -74,6 +76,10 @@ class ThumbnailGridView(QListWidget):
 
         # Enable tooltips
         self.setMouseTracking(True)
+
+        # Magnifier widget
+        self.magnifier = MagnifierWidget(self, size=150)
+        self._magnifier_timer: Optional[int] = None
 
         # Connect signals
         self.itemClicked.connect(self._on_item_clicked)
@@ -212,3 +218,79 @@ class ThumbnailGridView(QListWidget):
             if path:
                 paths.append(path)
         return paths
+
+    def mouseMoveEvent(self, event) -> None:
+        """Handle mouse move to show magnifier with 200ms delay."""
+        super().mouseMoveEvent(event)
+
+        # Cancel pending timer
+        if self._magnifier_timer is not None:
+            self.killTimer(self._magnifier_timer)
+            self._magnifier_timer = None
+
+        # Get item under cursor
+        item = self.itemAt(event.pos())
+        if not item:
+            self.magnifier.hide()
+            return
+
+        # Start 200ms timer before showing magnifier
+        self._magnifier_timer = self.startTimer(200)
+        self._pending_event = event
+        self._pending_item = item
+
+    def timerEvent(self, event) -> None:
+        """Show magnifier after delay."""
+        if event.timerId() == self._magnifier_timer:
+            self.killTimer(self._magnifier_timer)
+            self._magnifier_timer = None
+            self._show_magnifier(self._pending_event, self._pending_item)
+
+    def _show_magnifier(self, event, item) -> None:
+        """Actually show the magnifier."""
+        # Get image path
+        image_path = self._path_for_item(item)
+        if not image_path or not image_path.exists():
+            self.magnifier.hide()
+            return
+
+        # Get item's visual rectangle
+        item_rect = self.visualItemRect(item)
+
+        try:
+            # Load original image
+            pil_image = Image.open(image_path)
+
+            # Calculate scale: thumbnail fits within item_rect
+            scale_x = item_rect.width() / pil_image.width
+            scale_y = item_rect.height() / pil_image.height
+            scale = min(scale_x, scale_y)
+
+            # Calculate actual displayed image rect (centered in item_rect)
+            display_width = pil_image.width * scale
+            display_height = pil_image.height * scale
+            offset_x = item_rect.x() + (item_rect.width() - display_width) / 2
+            offset_y = item_rect.y() + (item_rect.height() - display_height) / 2
+
+            image_rect = QRectF(offset_x, offset_y, display_width, display_height)
+
+            # Update magnifier
+            self.magnifier.update_magnifier(
+                event.position(),
+                pil_image,
+                image_rect,
+                scale,
+                (self.width(), self.height())
+            )
+
+        except Exception:
+            # Fail Fast: Hide on error
+            self.magnifier.hide()
+
+    def leaveEvent(self, event) -> None:
+        """Hide magnifier when mouse leaves widget."""
+        if self._magnifier_timer is not None:
+            self.killTimer(self._magnifier_timer)
+            self._magnifier_timer = None
+        self.magnifier.hide()
+        super().leaveEvent(event)
