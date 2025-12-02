@@ -80,6 +80,8 @@ class ThumbnailGridView(QListWidget):
         # Magnifier widget
         self.magnifier = MagnifierWidget(self, size=150)
         self._magnifier_timer: Optional[int] = None
+        self._pending_event = None
+        self._pending_item = None
 
         # Connect signals
         self.itemClicked.connect(self._on_item_clicked)

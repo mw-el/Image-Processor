@@ -10,6 +10,6 @@ cd ~/_AA_Image_Processor
 # App mit conda run starten (zuverlässiger als manuelle Aktivierung)
 # Unset LD_LIBRARY_PATH to prevent system Qt interference
 echo "Launching app in aa-image-processor environment..."
-env -u LD_LIBRARY_PATH conda run -n aa-image-processor python -m src.app "$@"
+env -u LD_LIBRARY_PATH /home/matthias/miniconda3/bin/conda run -n aa-image-processor python -m src.app "$@"
 
 echo "AA Image Processor closed"
