@@ -626,6 +626,17 @@ class MainWindow(QMainWindow):
         self.view_results_btn.clicked.connect(self._show_results_viewer)
         save_row.addWidget(self.view_results_btn)
 
+        # Open in ComfyUI (single view)
+        self.open_in_comfy_btn = QPushButton()
+        self.open_in_comfy_btn.setIcon(qta.icon("mdi6.puzzle", color="white"))
+        self.open_in_comfy_btn.setIconSize(QSize(22, 22))
+        self.open_in_comfy_btn.setToolTip("In ComfyUI laden")
+        self.open_in_comfy_btn.setFixedSize(btn_size, btn_size)
+        self.open_in_comfy_btn.setStyleSheet(self.btn_style_normal)
+        self.open_in_comfy_btn.clicked.connect(lambda: self._open_in_comfyui(self.current_image_path))
+        self.open_in_comfy_btn.setEnabled(False)
+        save_row.addWidget(self.open_in_comfy_btn)
+
         self.info_btn = QPushButton()
         self.info_btn.setIcon(qta.icon("mdi6.information", color="white"))
         self.info_btn.setIconSize(QSize(24, 24))
@@ -697,6 +708,7 @@ class MainWindow(QMainWindow):
         self._set_adjustment_controls_enabled(True)
         self._enable_save_buttons(True)
         self._update_history_actions()
+        self._update_comfy_button_state()
         self.logger.info("Bild geladen: %s", path)
         self.status_bar.showMessage(f"Aktuelles Bild: {path.name}", 5000)
         self._append_status(f"Geladen: {path}")
@@ -1106,6 +1118,20 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(f"Fehler beim Öffnen der Ergebnisansicht: {exc}")
 
+    def _open_in_comfyui(self, image_path: Path | None) -> None:
+        """Launch external ComfyUI GUI with current image preloaded."""
+        if not image_path or not image_path.exists():
+            self._show_error("Bitte zuerst ein Bild laden.")
+            return
+        if not self._comfy_script.exists():
+            self._show_error(f"ComfyUI Startskript fehlt:\n{self._comfy_script}")
+            return
+        try:
+            subprocess.Popen([str(self._comfy_script), "--load-image", str(image_path)])
+            self._append_status(f"ComfyUI gestartet mit {image_path.name}")
+        except Exception as exc:
+            self._show_error(f"ComfyUI konnte nicht gestartet werden: {exc}")
+
     def _toggle_file_browser(self, checked: bool) -> None:
         """Toggle between file browser and image controls."""
         self.file_browser.setVisible(checked)
@@ -1188,6 +1214,9 @@ class MainWindow(QMainWindow):
         else:
             self.gallery_selection_label.setText(f"{selection_count} ausgewählt")
             self.delete_selected_btn.setEnabled(True)
+        # Auto-show and update metadata popup in gallery view
+        if self.view_mode == "gallery":
+            self._show_image_info_dialog(auto=True)
 
     def _open_image_from_gallery_item(self, item) -> None:
         """Open double-clicked image in single view."""
@@ -1328,44 +1357,42 @@ class MainWindow(QMainWindow):
         """Refresh content of the info dialog if it is open."""
         if not (self.info_dialog and self.info_dialog.isVisible() and self.current_image_path):
             return
-        width, height = self.current_resolution
-        resolution_text = f"{width} × {height}" if width and height else "Unbekannt"
-        metadata_body = self.metadata_text.strip() if self.metadata_text else "Keine Metadaten gefunden."
-        info_text = "\n".join(
-            [
-                f"Name: {self.current_image_path.name}",
-                f"Pfad: {self.current_image_path}",
-                f"Auflösung: {resolution_text}",
-                "",
-                "Metadaten:",
-                metadata_body,
-            ]
-        )
+        info_text = self._build_gallery_info_text() if self.view_mode == "gallery" else self._build_image_info_text()
         edit = self.info_dialog.findChild(QPlainTextEdit)
         if edit:
             edit.setPlainText(info_text)
 
-    def _show_image_info_dialog(self) -> None:
-        """Display image or gallery info in a popup."""
-        # Toggle: hide if already open
-        if self.info_dialog and self.info_dialog.isVisible():
-            self.info_dialog.close()
-            self._clear_info_dialog()
-            return
-
+    def _show_image_info_dialog(self, auto: bool = False) -> None:
+        """Display image or gallery info in a popup. Auto mode updates without toggling."""
         # Determine what info to show
         if self.view_mode == "gallery":
             info_text = self._build_gallery_info_text()
             title = "Galerie-Info"
         else:
             if not self.current_image_path:
-                self._show_error("Bitte zuerst ein Bild laden.")
+                if not auto:
+                    self._show_error("Bitte zuerst ein Bild laden.")
                 return
             info_text = self._build_image_info_text()
             title = "Bild-Info"
 
         if not info_text:
-            self._show_error("Keine Informationen verfügbar.")
+            if not auto:
+                self._show_error("Keine Informationen verfügbar.")
+            return
+
+        # If dialog already visible, just update text/position
+        if self.info_dialog and self.info_dialog.isVisible():
+            edit = self.info_dialog.findChild(QPlainTextEdit)
+            if edit:
+                edit.setPlainText(info_text)
+            self._position_info_dialog(self.info_dialog)
+            return
+
+        # Toggle off on manual invocation
+        if self.info_dialog and self.info_dialog.isVisible() and not auto:
+            self.info_dialog.close()
+            self._clear_info_dialog()
             return
 
         self.info_dialog = QDialog(self)
@@ -1375,7 +1402,8 @@ class MainWindow(QMainWindow):
         text_widget.setReadOnly(True)
         text_widget.setPlainText(info_text)
         layout.addWidget(text_widget)
-        self.info_dialog.resize(520, 420)
+        self.info_dialog.resize(380, 560)
+        self._position_info_dialog(self.info_dialog)
         self.info_dialog.finished.connect(lambda _: self._clear_info_dialog())
         self.info_dialog.show()
 
@@ -1469,6 +1497,22 @@ class MainWindow(QMainWindow):
         """Reset info dialog reference."""
         self.info_dialog = None
 
+    def _position_info_dialog(self, dialog: QDialog) -> None:
+        """Place info dialog in the right control area (fits white space)."""
+        try:
+            # Base dimensions
+            dialog_width = dialog.width()
+            dialog_height = dialog.height()
+            # Top-left of main window in global coords
+            top_left = self.mapToGlobal(self.rect().topLeft())
+            # Place near right control column, slightly below top buttons
+            margin = 12
+            x = top_left.x() + self.width() - self.controls_width + margin
+            y = top_left.y() + 90  # below top button rows
+            dialog.move(max(0, x), max(0, y))
+        except Exception:
+            pass
+
     def _build_variant_specs(self, adjusted: Image.Image) -> tuple[list[tuple[str, int, int]], str]:
         return self.session.build_variant_specs(adjusted)
 
@@ -1505,6 +1549,7 @@ class MainWindow(QMainWindow):
         self.metadata_text = ""
         self.metadata_dirty = False
         self.loaded_metadata = {}
+        self._comfy_script = Path.home() / "_AA_ComfyUI" / "start-gui.sh"
         self.current_resolution = (0, 0)
         if clear_canvas:
             self.canvas.clear()
@@ -1539,6 +1584,8 @@ class MainWindow(QMainWindow):
             self.delete_selected_btn.setEnabled(False)
         self._gallery_current_directory = None
         self._gallery_image_count = 0
+        if hasattr(self, "open_in_comfy_btn"):
+            self.open_in_comfy_btn.setEnabled(False)
         if self.info_dialog:
             self.info_dialog.close()
             self.info_dialog = None
@@ -1570,6 +1617,13 @@ class MainWindow(QMainWindow):
             self.redo_btn.setEnabled(has_redo)
         if hasattr(self, "reset_original_btn"):
             self.reset_original_btn.setEnabled(has_original)
+        self._update_comfy_button_state()
+
+    def _update_comfy_button_state(self) -> None:
+        """Enable ComfyUI launch button if image and launcher script are available."""
+        enabled = bool(self.current_image_path and self._comfy_script.exists())
+        if hasattr(self, "open_in_comfy_btn"):
+            self.open_in_comfy_btn.setEnabled(enabled)
 
     # --- History controls ----------------------------------------------------
     def undo_change(self) -> None:
