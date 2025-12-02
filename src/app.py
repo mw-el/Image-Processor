@@ -33,6 +33,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         nargs="?",
         help="Optional Pfad zu einer Bilddatei, die beim Start geöffnet wird.",
     )
+    parser.add_argument(
+        "-v", "--view",
+        choices=["single", "gallery"],
+        default="single",
+        help="Startansicht: 'single' (Standard) oder 'gallery' (Galerieansicht mit Ordner).",
+    )
     return parser.parse_args(argv)
 
 
@@ -41,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     initial_path = Path(args.image).expanduser() if args.image else None
+    initial_view = args.view
 
     app = QApplication(sys.argv)
     app.setApplicationName("AA Image Processor")
@@ -54,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if initial_path and not initial_path.exists():
         initial_path = None
 
-    window = MainWindow(settings, initial_path=initial_path)
+    window = MainWindow(settings, initial_path=initial_path, initial_view=initial_view)
     if icon:
         window.setWindowIcon(icon)
     window.show()

@@ -64,12 +64,13 @@ class MainWindow(QMainWindow):
     Subsequent phases will replace the label with the actual image canvas.
     """
 
-    def __init__(self, settings: AppSettings, initial_path: Path | None = None) -> None:
+    def __init__(self, settings: AppSettings, initial_path: Path | None = None, initial_view: str = "single") -> None:
         super().__init__()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.image_store = ImageStore()
         self.settings = settings
         self._initial_path = initial_path
+        self._initial_view = initial_view
         self.processing_pipeline = ProcessingPipeline(
             ProcessingConfig(
                 sharpen_radius=settings.processing.sharpen_radius,
@@ -706,6 +707,9 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Datei nicht gefunden: {path}", 7000)
             return
         self._handle_file_drop(path)
+        # If initial view is gallery, switch after loading the image
+        if self._initial_view == "gallery":
+            QTimer.singleShot(100, lambda: self._set_view_mode("gallery"))
 
     # --- Drag & drop events --------------------------------------------------
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
