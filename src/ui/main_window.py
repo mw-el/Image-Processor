@@ -104,6 +104,8 @@ class MainWindow(QMainWindow):
         self.balance_mode: int = 0  # 0=none, 1=photoshop, 2=conservative, 3=color-only
         self.recent_manager = RecentManager()
         self.view_mode = "single"
+        self._gallery_current_directory: Path | None = None
+        self._gallery_image_count: int = 0
 
         self.setWindowTitle("AA Image Processor")
         self.resize(1580, 900)  # +300px for browser sidebar
@@ -270,19 +272,20 @@ class MainWindow(QMainWindow):
         gallery_toolbar = QHBoxLayout()
         gallery_toolbar.setContentsMargins(0, 0, 0, 0)
         gallery_toolbar.setSpacing(8)
-        self.gallery_title_label = QLabel("Keine Galerie geladen")
+        self.gallery_title_label = QLabel("Galerieansicht")
+        self.gallery_title_label.setStyleSheet("font-weight: bold;")
         gallery_toolbar.addWidget(self.gallery_title_label)
         gallery_toolbar.addStretch()
         self.gallery_selection_label = QLabel("")
         gallery_toolbar.addWidget(self.gallery_selection_label)
-        self.gallery_count_label = QLabel("")
-        gallery_toolbar.addWidget(self.gallery_count_label)
-        self.delete_selected_btn = QPushButton("Delete Selected")
+        self.delete_selected_btn = QPushButton()
         self.delete_selected_btn.setIcon(qta.icon("mdi6.delete", color="white"))
         self.delete_selected_btn.setIconSize(QSize(20, 20))
         self.delete_selected_btn.setFixedHeight(32)
+        self.delete_selected_btn.setFixedWidth(32)
         self.delete_selected_btn.setStyleSheet(self.btn_style_normal)
         self.delete_selected_btn.setEnabled(False)
+        self.delete_selected_btn.setToolTip("Ausgewählte Bilder löschen")
         self.delete_selected_btn.clicked.connect(self._delete_selected_images)
         gallery_toolbar.addWidget(self.delete_selected_btn)
 
@@ -1131,7 +1134,7 @@ class MainWindow(QMainWindow):
         self.gallery_view_btn.blockSignals(False)
 
     def _refresh_gallery_from_current_image(self, load: bool | None = None) -> None:
-        """Update gallery header and optionally load thumbnails for current folder."""
+        """Update gallery and optionally load thumbnails for current folder."""
         directory: Path | None = None
         if self.current_image_path and self.current_image_path.exists():
             directory = self.current_image_path.parent
@@ -1139,14 +1142,13 @@ class MainWindow(QMainWindow):
             directory = self.current_folder
 
         if not directory or not directory.exists():
-            self.gallery_title_label.setText("Keine Galerie geladen")
             self.gallery_grid.clear()
             self.gallery_selection_label.setText("")
             self.delete_selected_btn.setEnabled(False)
             self._append_status("Galerie: Kein gültiges Verzeichnis gefunden.")
             return
 
-        self.gallery_title_label.setText(f"Galerie: {directory.name}")
+        self._gallery_current_directory = directory
         should_load = load if load is not None else self.view_mode == "gallery"
         count = 0
         if should_load:
@@ -1156,14 +1158,8 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._append_status(f"Galerie konnte nicht geladen werden: {exc}")
                 count = 0
-        suffix = f" ({count} Dateien)" if count else " (0 Dateien)"
-        self.gallery_title_label.setText(f"Galerie: {directory.name}{suffix} – {directory}")
-        if count == 0:
-            self.gallery_selection_label.setText(f"Keine Bilder gefunden in {directory}")
-        else:
-            self.gallery_selection_label.setText("")
-        if hasattr(self, "gallery_count_label"):
-            self.gallery_count_label.setText(f"{count} Datei(en) im Ordner")
+
+        self._gallery_image_count = count
         self.delete_selected_btn.setEnabled(False)
         self.gallery_grid.viewport().update()
 
@@ -1334,22 +1330,49 @@ class MainWindow(QMainWindow):
             edit.setPlainText(info_text)
 
     def _show_image_info_dialog(self) -> None:
-        """Display filename, path, resolution and metadata in a popup."""
-        if not self.current_image_path:
-            self._show_error("Bitte zuerst ein Bild laden.")
-            return
-
+        """Display image or gallery info in a popup."""
         # Toggle: hide if already open
         if self.info_dialog and self.info_dialog.isVisible():
             self.info_dialog.close()
             self._clear_info_dialog()
             return
 
+        # Determine what info to show
+        if self.view_mode == "gallery":
+            info_text = self._build_gallery_info_text()
+            title = "Galerie-Info"
+        else:
+            if not self.current_image_path:
+                self._show_error("Bitte zuerst ein Bild laden.")
+                return
+            info_text = self._build_image_info_text()
+            title = "Bild-Info"
+
+        if not info_text:
+            self._show_error("Keine Informationen verfügbar.")
+            return
+
+        self.info_dialog = QDialog(self)
+        self.info_dialog.setWindowTitle(title)
+        layout = QVBoxLayout(self.info_dialog)
+        text_widget = QPlainTextEdit()
+        text_widget.setReadOnly(True)
+        text_widget.setPlainText(info_text)
+        layout.addWidget(text_widget)
+        self.info_dialog.resize(520, 420)
+        self.info_dialog.finished.connect(lambda _: self._clear_info_dialog())
+        self.info_dialog.show()
+
+    def _build_image_info_text(self) -> str:
+        """Build info text for current image in single view or selected gallery image."""
+        if not self.current_image_path:
+            return ""
+
         width, height = self.current_resolution
         resolution_text = f"{width} × {height}" if width and height else "Unbekannt"
         metadata_body = self.metadata_text.strip() if self.metadata_text else "Keine Metadaten gefunden."
 
-        info_text = "\n".join(
+        return "\n".join(
             [
                 f"Name: {self.current_image_path.name}",
                 f"Pfad: {self.current_image_path}",
@@ -1360,16 +1383,71 @@ class MainWindow(QMainWindow):
             ]
         )
 
-        self.info_dialog = QDialog(self)
-        self.info_dialog.setWindowTitle("Bild-Info")
-        layout = QVBoxLayout(self.info_dialog)
-        text_widget = QPlainTextEdit()
-        text_widget.setReadOnly(True)
-        text_widget.setPlainText(info_text)
-        layout.addWidget(text_widget)
-        self.info_dialog.resize(520, 420)
-        self.info_dialog.finished.connect(lambda _: self._clear_info_dialog())
-        self.info_dialog.show()
+    def _build_gallery_info_text(self) -> str:
+        """Build info text for gallery view."""
+        selected_items = self.gallery_grid.selectedItems()
+
+        if not selected_items:
+            # No selection: show gallery-wide info
+            if not self._gallery_current_directory:
+                return "Keine Galerie geladen."
+
+            return "\n".join(
+                [
+                    f"Galerieordner: {self._gallery_current_directory}",
+                    f"Bilder im Ordner: {self._gallery_image_count}",
+                    "",
+                    "Klicke auf ein Bild, um dessen Details anzuzeigen.",
+                ]
+            )
+
+        # Selection: show info for selected image(s)
+        if len(selected_items) == 1:
+            # Single image: show detailed info
+            item = selected_items[0]
+            image_path = self.gallery_grid.path_for_item(item)
+            if not image_path:
+                return "Bildinformation nicht verfügbar."
+
+            try:
+                with Image.open(image_path) as img:
+                    width, height = img.size
+                    metadata = {str(k): str(v) for k, v in img.info.items()}
+            except Exception:
+                width, height = 0, 0
+                metadata = {}
+
+            resolution_text = f"{width} × {height}" if width and height else "Unbekannt"
+            metadata_body = "\n".join(f"{k}={v}" for k, v in metadata.items()) if metadata else "Keine Metadaten gefunden."
+
+            return "\n".join(
+                [
+                    f"Name: {image_path.name}",
+                    f"Pfad: {image_path}",
+                    f"Auflösung: {resolution_text}",
+                    "",
+                    "Metadaten:",
+                    metadata_body,
+                ]
+            )
+        else:
+            # Multiple images: show selection summary
+            total_size = 0
+            try:
+                for item in selected_items:
+                    image_path = self.gallery_grid.path_for_item(item)
+                    if image_path and image_path.exists():
+                        total_size += image_path.stat().st_size
+            except Exception:
+                pass
+
+            size_text = f"{total_size / (1024*1024):.2f} MB" if total_size else "Unbekannt"
+            return "\n".join(
+                [
+                    f"Anzahl ausgewählter Bilder: {len(selected_items)}",
+                    f"Gesamtgröße: {size_text}",
+                ]
+            )
 
     def _clear_info_dialog(self) -> None:
         """Reset info dialog reference."""
@@ -1438,11 +1516,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, "gallery_grid"):
             self.gallery_grid.clear()
         if hasattr(self, "gallery_title_label"):
-            self.gallery_title_label.setText("Keine Galerie geladen")
+            self.gallery_title_label.setText("Galerieansicht")
         if hasattr(self, "gallery_selection_label"):
             self.gallery_selection_label.setText("")
         if hasattr(self, "delete_selected_btn"):
             self.delete_selected_btn.setEnabled(False)
+        self._gallery_current_directory = None
+        self._gallery_image_count = 0
         if self.info_dialog:
             self.info_dialog.close()
             self.info_dialog = None
