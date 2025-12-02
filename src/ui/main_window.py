@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
 
         self.save_action = QAction("Änderungen speichern", self)
         self.save_action.setShortcut("Ctrl+S")
-        self.save_action.triggered.connect(self.export_variants)
+        self.save_action.triggered.connect(self._save_simple)
         self.save_action.setEnabled(False)
 
         self.undo_action = QAction("Rückgängig", self)
@@ -584,10 +584,22 @@ class MainWindow(QMainWindow):
         save_row = QHBoxLayout()
         save_row.setSpacing(6)
 
+        # Simple save: overwrite original with current adjustments
+        self.save_simple_btn = QPushButton()
+        self.save_simple_btn.setIcon(qta.icon("mdi6.content-save", color="white"))
+        self.save_simple_btn.setIconSize(QSize(24, 24))
+        self.save_simple_btn.setToolTip("Bild mit Änderungen speichern (überschreibt Original)")
+        self.save_simple_btn.setFixedSize(btn_size, btn_size)
+        self.save_simple_btn.setStyleSheet(self.btn_style_normal)
+        self.save_simple_btn.clicked.connect(self._save_simple)
+        save_row.addWidget(self.save_simple_btn)
+        self.adjustment_controls.append(self.save_simple_btn)
+
+        # Export variants: multiple resolutions
         self.save_changes_btn = QPushButton()
-        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save", color="white"))
+        self.save_changes_btn.setIcon(qta.icon("mdi6.content-save-multiple", color="white"))
         self.save_changes_btn.setIconSize(QSize(24, 24))
-        self.save_changes_btn.setToolTip("Aktuelle Varianten exportieren (Ctrl+S)")
+        self.save_changes_btn.setToolTip("Varianten speichern (mehrere Auflösungen)")
         self.save_changes_btn.setFixedSize(btn_size, btn_size)
         self.save_changes_btn.setStyleSheet(self.btn_style_normal)
         self.save_changes_btn.clicked.connect(self.export_variants)
@@ -1764,6 +1776,65 @@ class MainWindow(QMainWindow):
 
         return paths
 
+    def _save_simple(self) -> None:
+        """Save current adjusted image to original file (overwrite)."""
+        if not self.image_store.current or not self.session.has_image():
+            self._show_error("Bitte zuerst ein Bild laden.")
+            return
+
+        if self.current_adjusted_image is None:
+            if self.has_ratio_selection:
+                self.apply_crop()
+            else:
+                self._show_error("Keine Änderungen zum Speichern vorhanden.")
+                return
+
+        target_path = self.image_store.current.path
+        image_to_save = self.current_adjusted_image
+
+        # Confirm overwrite
+        confirm = QMessageBox.question(
+            self,
+            "Original überschreiben?",
+            f"Datei wird überschrieben:\n{target_path.name}\n\nFortfahren?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            self._append_status(f"Speichere: {target_path.name}")
+
+            # Determine format and save parameters
+            suffix = target_path.suffix.lower()
+            save_kwargs = {}
+
+            if suffix in {".jpg", ".jpeg"}:
+                if image_to_save.mode == "RGBA":
+                    image_to_save = image_to_save.convert("RGB")
+                save_kwargs = {"quality": self.settings.export.quality}
+            elif suffix == ".webp":
+                save_kwargs = {"quality": self.settings.export.quality, "method": 6}
+            elif suffix == ".png":
+                save_kwargs = {"compress_level": 6}
+
+            image_to_save.save(target_path, **save_kwargs)
+
+            self.metadata_dirty = False
+            self.status_bar.showMessage(f"Gespeichert: {target_path.name}", 5000)
+            self._append_status(f"✓ Bild gespeichert: {target_path.name}")
+
+            # Update last exported paths for results viewer
+            self.last_exported_paths = [target_path]
+            if hasattr(self, "view_results_btn"):
+                self.view_results_btn.setEnabled(True)
+
+        except Exception as exc:
+            self.logger.exception("Fehler beim Speichern")
+            self._show_error(f"Fehler beim Speichern: {exc}")
+            self._append_status(f"✗ Fehler: {exc}")
+
     def export_variants(self) -> None:
         if self.current_adjusted_image is None and self.has_ratio_selection:
             self.apply_crop()
@@ -1772,7 +1843,7 @@ class MainWindow(QMainWindow):
             self._show_error("Keine Varianten zum Export vorhanden.")
             return
 
-        self._append_status("=== Export-Prozess gestartet ===")
+        self._append_status("=== Varianten-Export gestartet ===")
 
         paths = self._do_export_variants(self.image_store.current.path)
         if not paths:
@@ -1781,8 +1852,8 @@ class MainWindow(QMainWindow):
         names = ", ".join(path.name for path in paths)
         self.metadata_dirty = False
         self.status_bar.showMessage(f"Exportiert: {names}", 7000)
-        self._append_status("✓ Gespeichert: " + ", ".join(str(p) for p in paths))
-        self._append_status("=== Export abgeschlossen ===")
+        self._append_status("✓ Varianten gespeichert: " + ", ".join(str(p) for p in paths))
+        self._append_status("=== Varianten-Export abgeschlossen ===")
 
         # Save paths and enable results viewer + save as button
         self.last_exported_paths = paths
