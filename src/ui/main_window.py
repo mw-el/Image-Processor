@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Any
 
 from PySide6.QtCore import Qt, QRectF, QTimer, QSize
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self._create_menus()
         self._create_ui_with_browser()
+        self._setup_shortcuts()
 
     # --- UI creation helpers -------------------------------------------------
     def _create_actions(self) -> None:
@@ -186,6 +187,11 @@ class MainWindow(QMainWindow):
         self._update_history_actions()
         if self._initial_path:
             QTimer.singleShot(0, lambda: self._open_initial_image(self._initial_path))
+
+    def _setup_shortcuts(self) -> None:
+        """Register global shortcuts that depend on the current view."""
+        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
+        self.delete_shortcut.activated.connect(self._handle_delete_shortcut)
 
     def _create_central_content(self, parent_layout: QVBoxLayout) -> None:
         """Create the main content area (canvas + controls)."""
@@ -269,6 +275,8 @@ class MainWindow(QMainWindow):
         self.gallery_grid.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.gallery_grid.itemSelectionChanged.connect(self._update_gallery_selection_state)
         self.gallery_grid.itemDoubleClicked.connect(self._open_image_from_gallery_item)
+        self.gallery_grid.magnifier_started.connect(self._hide_info_dialog)
+        self.gallery_grid.magnifier_stopped.connect(self._maybe_auto_show_info)
 
         gallery_toolbar = QHBoxLayout()
         gallery_toolbar.setContentsMargins(0, 0, 0, 0)
@@ -395,6 +403,17 @@ class MainWindow(QMainWindow):
         self.reset_original_btn.clicked.connect(self.reset_to_original)
         self.reset_original_btn.setEnabled(False)
         file_row.addWidget(self.reset_original_btn)
+
+        # Delete current image
+        self.delete_current_btn = QPushButton()
+        self.delete_current_btn.setIcon(qta.icon("mdi6.delete", color="white"))
+        self.delete_current_btn.setIconSize(QSize(24, 24))
+        self.delete_current_btn.setToolTip("Aktuelles Bild löschen (Entf)")
+        self.delete_current_btn.setFixedSize(btn_size, btn_size)
+        self.delete_current_btn.setStyleSheet(self.btn_style_normal)
+        self.delete_current_btn.clicked.connect(self._delete_current_image)
+        self.delete_current_btn.setEnabled(False)
+        file_row.addWidget(self.delete_current_btn)
 
         file_row.addStretch()
         controls_layout.addLayout(file_row)
@@ -1276,6 +1295,51 @@ class MainWindow(QMainWindow):
 
         self._refresh_gallery_from_current_image(load=True)
 
+    def _delete_current_image(self) -> None:
+        """Delete the currently opened image in single view."""
+        path = getattr(self, "current_image_path", None)
+        if not path:
+            return
+        if not path.exists():
+            self._show_error("Datei existiert nicht mehr auf der Festplatte.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Aktuelles Bild löschen?",
+            f"{path.name} dauerhaft löschen?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        prev_path, next_path = self._get_sibling_images()
+        try:
+            path.unlink()
+        except Exception as exc:
+            self._show_error(f"Konnte nicht löschen:\n{exc}")
+            return
+
+        self._append_status(f"Gelöscht: {path.name}")
+        replacement = next_path or prev_path
+        if replacement and replacement.exists():
+            self._handle_file_drop(replacement)
+        else:
+            self._reset_internal_state()
+            self.current_image_path = None
+            self._append_status("Keine weiteren Bilder im Ordner.")
+            self.status_bar.showMessage("Keine weiteren Bilder im Ordner.", 4000)
+            self._refresh_gallery_from_current_image(load=True)
+
+    def _handle_delete_shortcut(self) -> None:
+        """Handle Delete key for gallery selection or current image."""
+        if self.view_mode == "gallery":
+            if self.gallery_grid.selectedItems():
+                self._delete_selected_images()
+        else:
+            self._delete_current_image()
+
     def _sync_temperature_slider(self, value: int) -> None:
         if hasattr(self, "temperature_slider"):
             self.temperature_slider.blockSignals(True)
@@ -1304,6 +1368,8 @@ class MainWindow(QMainWindow):
         for widget in getattr(self, "adjustment_controls", []):
             widget.setEnabled(enabled)
         self._enable_save_buttons(enabled and self.current_adjusted_image is not None)
+        if hasattr(self, "delete_current_btn"):
+            self.delete_current_btn.setEnabled(enabled and self.current_image_path is not None)
 
     def _enable_save_buttons(self, enabled: bool) -> None:
         if hasattr(self, "save_action"):
@@ -1361,6 +1427,16 @@ class MainWindow(QMainWindow):
         edit = self.info_dialog.findChild(QPlainTextEdit)
         if edit:
             edit.setPlainText(info_text)
+
+    def _hide_info_dialog(self) -> None:
+        """Hide info dialog if visible (used when magnifier appears)."""
+        if self.info_dialog and self.info_dialog.isVisible():
+            self.info_dialog.hide()
+
+    def _maybe_auto_show_info(self) -> None:
+        """Re-show auto info in gallery after magnifier stops, if previously visible."""
+        if self.view_mode == "gallery":
+            self._show_image_info_dialog(auto=True)
 
     def _show_image_info_dialog(self, auto: bool = False) -> None:
         """Display image or gallery info in a popup. Auto mode updates without toggling."""
@@ -1584,6 +1660,8 @@ class MainWindow(QMainWindow):
             self.gallery_selection_label.setText("")
         if hasattr(self, "delete_selected_btn"):
             self.delete_selected_btn.setEnabled(False)
+        if hasattr(self, "delete_current_btn"):
+            self.delete_current_btn.setEnabled(False)
         self._gallery_current_directory = None
         self._gallery_image_count = 0
         if hasattr(self, "open_in_comfy_btn"):
@@ -2132,7 +2210,10 @@ class MainWindow(QMainWindow):
             self._show_error(f"Ordner existiert nicht mehr:\n{folder_path}")
             return
 
-        # Show file browser and navigate to folder
-        self.toggle_browser_btn.setChecked(True)
-        self._toggle_file_browser(True)
-        self.file_browser.file_tree.navigate_to(folder_path)
+        # Jump directly into gallery view for this folder (no sidebar preview)
+        self.toggle_browser_btn.setChecked(False)
+        self._toggle_file_browser(False)
+        self.current_folder = folder_path
+        self.current_image_path = None
+        self._set_view_mode("gallery")
+        self._refresh_gallery_from_current_image(load=True)

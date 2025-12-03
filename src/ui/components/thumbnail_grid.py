@@ -52,6 +52,8 @@ class ThumbnailGridView(QListWidget):
 
     # Signal when image is clicked
     image_selected = Signal(Path)
+    magnifier_started = Signal()
+    magnifier_stopped = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -80,8 +82,10 @@ class ThumbnailGridView(QListWidget):
         # Magnifier widget
         self.magnifier = MagnifierWidget(self, size=150)
         self._magnifier_timer: Optional[int] = None
-        self._pending_event = None
         self._pending_item = None
+        self._pending_pos = None
+        self._magnifier_active = False
+        self._active_item = None
 
         # Connect signals
         self.itemClicked.connect(self._on_item_clicked)
@@ -222,7 +226,7 @@ class ThumbnailGridView(QListWidget):
         return paths
 
     def mouseMoveEvent(self, event) -> None:
-        """Handle mouse move to show magnifier with 200ms delay."""
+        """Handle mouse move to show magnifier with 1s delay and then follow cursor."""
         super().mouseMoveEvent(event)
 
         # Cancel pending timer
@@ -234,21 +238,40 @@ class ThumbnailGridView(QListWidget):
         item = self.itemAt(event.pos())
         if not item:
             self.magnifier.hide()
+            self._pending_pos = None
+            self._pending_item = None
+            self._magnifier_active = False
+            self._active_item = None
             return
 
-        # Start 200ms timer before showing magnifier
-        self._magnifier_timer = self.startTimer(200)
-        self._pending_event = event
+        # If magnifier already active on this item, update immediately
+        if self._magnifier_active and self._active_item is item:
+            self._show_magnifier(event.position(), item)
+            return
+
+        # Otherwise start delayed activation
+        # Start 1000ms timer before showing magnifier
+        self._magnifier_timer = self.startTimer(1000)
+        self._pending_pos = event.position()
         self._pending_item = item
+        self._magnifier_active = False
+        self._active_item = None
 
     def timerEvent(self, event) -> None:
         """Show magnifier after delay."""
         if event.timerId() == self._magnifier_timer:
             self.killTimer(self._magnifier_timer)
             self._magnifier_timer = None
-            self._show_magnifier(self._pending_event, self._pending_item)
+            if self._pending_pos is None or self._pending_item is None:
+                self.magnifier.hide()
+                self.magnifier_stopped.emit()
+                return
+            self._show_magnifier(self._pending_pos, self._pending_item)
+            self._pending_pos = None
+            self._pending_item = None
+            self._magnifier_active = True
 
-    def _show_magnifier(self, event, item) -> None:
+    def _show_magnifier(self, pos, item) -> None:
         """Actually show the magnifier."""
         # Get image path
         image_path = self._path_for_item(item)
@@ -278,12 +301,14 @@ class ThumbnailGridView(QListWidget):
 
             # Update magnifier
             self.magnifier.update_magnifier(
-                event.position(),
+                pos,
                 pil_image,
                 image_rect,
                 scale,
                 (self.width(), self.height())
             )
+            self._active_item = item
+            self.magnifier_started.emit()
 
         except Exception:
             # Fail Fast: Hide on error
@@ -295,4 +320,9 @@ class ThumbnailGridView(QListWidget):
             self.killTimer(self._magnifier_timer)
             self._magnifier_timer = None
         self.magnifier.hide()
+        self._pending_pos = None
+        self._pending_item = None
+        self._magnifier_active = False
+        self._active_item = None
+        self.magnifier_stopped.emit()
         super().leaveEvent(event)
