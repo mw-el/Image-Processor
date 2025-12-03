@@ -58,6 +58,9 @@ class ThumbnailGridView(QListWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
+        # Sort mode: "name", "date", "resolution"
+        self.sort_mode = "date"
+
         self.cache = ThumbnailCache()
         self.current_directory: Optional[Path] = None
         self._item_paths: dict[int, Path] = {}  # Map item index to Path
@@ -112,8 +115,9 @@ class ThumbnailGridView(QListWidget):
             except Exception:
                 pass
 
-        # Deduplicate and sort
-        all_images = sorted(set(all_images), key=lambda p: p.name.lower())
+        # Deduplicate and sort according to current sort mode
+        all_images = list(set(all_images))
+        all_images = self._sort_images(all_images)
 
         count = 0
         for path in all_images:
@@ -124,6 +128,37 @@ class ThumbnailGridView(QListWidget):
                 pass
 
         return count
+
+    def _sort_images(self, images: list[Path]) -> list[Path]:
+        """Sort images according to current sort mode."""
+        if self.sort_mode == "name":
+            # A-Z alphabetically
+            return sorted(images, key=lambda p: p.name.lower())
+        elif self.sort_mode == "date":
+            # Newest first (highest mtime first)
+            return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
+        elif self.sort_mode == "resolution":
+            # Highest resolution first (width * height)
+            def get_resolution(path: Path) -> int:
+                try:
+                    pixmap = QPixmap(str(path))
+                    if not pixmap.isNull():
+                        return pixmap.width() * pixmap.height()
+                except Exception:
+                    pass
+                return 0
+            return sorted(images, key=get_resolution, reverse=True)
+        else:
+            # Fallback: alphabetically
+            return sorted(images, key=lambda p: p.name.lower())
+
+    def set_sort_mode(self, mode: str) -> None:
+        """Change sort mode and reload directory."""
+        if mode not in ("name", "date", "resolution"):
+            return
+        self.sort_mode = mode
+        if self.current_directory:
+            self.load_directory(self.current_directory)
 
     def _add_thumbnail_item(self, image_path: Path) -> None:
         """Add thumbnail item to grid (sync load, no cache)."""
@@ -273,6 +308,9 @@ class ThumbnailGridView(QListWidget):
 
     def _show_magnifier(self, pos, item) -> None:
         """Actually show the magnifier."""
+        # Emit signal FIRST to hide info dialog before magnifier appears
+        self.magnifier_started.emit()
+
         # Get image path
         image_path = self._path_for_item(item)
         if not image_path or not image_path.exists():
@@ -308,7 +346,6 @@ class ThumbnailGridView(QListWidget):
                 (self.width(), self.height())
             )
             self._active_item = item
-            self.magnifier_started.emit()
 
         except Exception:
             # Fail Fast: Hide on error

@@ -5,7 +5,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Iterable, Any
 
-from PySide6.QtCore import Qt, QRectF, QTimer, QSize
+from PySide6.QtCore import Qt, QRectF, QTimer, QSize, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
@@ -52,7 +52,6 @@ from .dialogs.results_viewer import ResultsViewerDialog
 from .dialogs.save_as_dialog import SaveAsDialog
 from .controllers.zoom_controller import ZoomController
 from .views.image_canvas import ImageCanvas
-from .components.file_browser_sidebar import FileBrowserSidebar
 from .components.thumbnail_grid import ThumbnailGridView
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
@@ -107,14 +106,15 @@ class MainWindow(QMainWindow):
         self.view_mode = "single"
         self._gallery_current_directory: Path | None = None
         self._gallery_image_count: int = 0
+        self._is_loading: bool = False  # Prevent concurrent loads
 
         self.setWindowTitle("AA Image Processor")
-        self.resize(1580, 900)  # +300px for browser sidebar
+        self.resize(1280, 900)
         self.setAcceptDrops(True)
 
         self._create_actions()
         self._create_menus()
-        self._create_ui_with_browser()
+        self._create_ui()
         self._setup_shortcuts()
 
     # --- UI creation helpers -------------------------------------------------
@@ -147,10 +147,6 @@ class MainWindow(QMainWindow):
         self.exit_action.setShortcut("Ctrl+Q")
         self.exit_action.triggered.connect(self.close)
 
-        self.toggle_browser_action = QAction("Browser ein/aus", self)
-        self.toggle_browser_action.setCheckable(True)
-        self.toggle_browser_action.setChecked(True)  # Initial visible
-        self.toggle_browser_action.triggered.connect(self._toggle_file_browser)
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&Datei")
@@ -165,8 +161,8 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(self.reset_action)
 
-    def _create_ui_with_browser(self) -> None:
-        """Create main UI with browser in right panel."""
+    def _create_ui(self) -> None:
+        """Create main UI."""
         # Main container
         main_container = QWidget()
         main_layout = QVBoxLayout(main_container)
@@ -284,6 +280,33 @@ class MainWindow(QMainWindow):
         self.gallery_title_label = QLabel("Galerieansicht")
         self.gallery_title_label.setStyleSheet("font-weight: bold;")
         gallery_toolbar.addWidget(self.gallery_title_label)
+
+        # Sort options
+        sort_label = QLabel("Sortierung:")
+        gallery_toolbar.addWidget(sort_label)
+
+        self.sort_name_btn = QPushButton("A-Z")
+        self.sort_name_btn.setFixedHeight(28)
+        self.sort_name_btn.setCheckable(True)
+        self.sort_name_btn.setToolTip("Alphabetisch sortieren (A-Z)")
+        self.sort_name_btn.clicked.connect(lambda: self._set_gallery_sort("name"))
+        gallery_toolbar.addWidget(self.sort_name_btn)
+
+        self.sort_date_btn = QPushButton("Neueste")
+        self.sort_date_btn.setFixedHeight(28)
+        self.sort_date_btn.setCheckable(True)
+        self.sort_date_btn.setChecked(True)  # Default
+        self.sort_date_btn.setToolTip("Nach Erstellungsdatum sortieren (Neueste zuerst)")
+        self.sort_date_btn.clicked.connect(lambda: self._set_gallery_sort("date"))
+        gallery_toolbar.addWidget(self.sort_date_btn)
+
+        self.sort_resolution_btn = QPushButton("Auflösung")
+        self.sort_resolution_btn.setFixedHeight(28)
+        self.sort_resolution_btn.setCheckable(True)
+        self.sort_resolution_btn.setToolTip("Nach Auflösung sortieren (Höchste zuerst)")
+        self.sort_resolution_btn.clicked.connect(lambda: self._set_gallery_sort("resolution"))
+        gallery_toolbar.addWidget(self.sort_resolution_btn)
+
         gallery_toolbar.addStretch()
         self.gallery_selection_label = QLabel("")
         gallery_toolbar.addWidget(self.gallery_selection_label)
@@ -359,17 +382,6 @@ class MainWindow(QMainWindow):
         self.recent_folders_btn.clicked.connect(self._show_recent_folders_menu)
         file_row.addWidget(self.recent_folders_btn)
 
-        # Toggle browser panel
-        self.toggle_browser_btn = QPushButton()
-        self.toggle_browser_btn.setIcon(qta.icon("mdi6.folder-eye", color="white"))
-        self.toggle_browser_btn.setIconSize(QSize(24, 24))
-        self.toggle_browser_btn.setToolTip("Browser-Panel ein/aus")
-        self.toggle_browser_btn.setFixedSize(btn_size, btn_size)
-        self.toggle_browser_btn.setCheckable(True)
-        self.toggle_browser_btn.setChecked(False)  # Start hidden
-        self.toggle_browser_btn.setStyleSheet(self.btn_style_checkable)
-        self.toggle_browser_btn.clicked.connect(self._toggle_file_browser)
-        file_row.addWidget(self.toggle_browser_btn)
 
         # Undo
         self.undo_btn = QPushButton()
@@ -418,13 +430,8 @@ class MainWindow(QMainWindow):
         file_row.addStretch()
         controls_layout.addLayout(file_row)
 
-        # === File browser (shows when toggle is checked) ===
-        self.file_browser = FileBrowserSidebar(start_path=Path.home())
-        self.file_browser.image_selected.connect(self._handle_file_drop)
-        self.file_browser.hide()  # Start hidden
-        controls_layout.addWidget(self.file_browser, stretch=1)
 
-        # === Image controls container (shows when browser is hidden AND image loaded) ===
+        # === Image controls container ===
         self.image_controls_container = QWidget()
         image_controls_layout = QVBoxLayout(self.image_controls_container)
         image_controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -628,7 +635,7 @@ class MainWindow(QMainWindow):
         self.save_as_btn = QPushButton()
         self.save_as_btn.setIcon(qta.icon("mdi6.content-save-cog", color="white"))
         self.save_as_btn.setIconSize(QSize(24, 24))
-        self.save_as_btn.setToolTip("Mit Auflösung und Format speichern")
+        self.save_as_btn.setToolTip("Speichern unter (Auflösung & Format wählbar)")
         self.save_as_btn.setFixedSize(btn_size, btn_size)
         self.save_as_btn.setStyleSheet(self.btn_style_normal)
         self.save_as_btn.clicked.connect(self._save_variants_as)
@@ -681,24 +688,80 @@ class MainWindow(QMainWindow):
 
     # --- File handling -------------------------------------------------------
     def open_image_dialog(self) -> None:
-        start_dir = str(Path.home())
-        file_path, _ = QFileDialog.getOpenFileName(
+        # Start in last used directory if available
+        if self.current_image_path and self.current_image_path.exists():
+            start_dir = str(self.current_image_path.parent)
+        elif self.current_folder and self.current_folder.exists():
+            start_dir = str(self.current_folder)
+        else:
+            start_dir = str(Path.home())
+
+        dialog = QFileDialog(
             self,
             "Bild öffnen",
             start_dir,
-            "Bilder (*.png *.jpg *.jpeg *.webp *.bmp *.tiff)",
+            "Bilder (*.png *.jpg *.jpeg *.webp *.bmp *.tiff)"
         )
+        dialog.setFileMode(QFileDialog.ExistingFile)
+        dialog.setOptions(QFileDialog.DontUseNativeDialog)
 
-        if file_path:
-            self._handle_file_drop(Path(file_path))
+        # Add Nautilus bookmarks as shortcuts
+        bookmarks = self._load_nautilus_bookmarks()
+        for bookmark_path in bookmarks:
+            if bookmark_path.exists():
+                dialog.setSidebarUrls(dialog.sidebarUrls() + [QUrl.fromLocalFile(str(bookmark_path))])
+
+        if dialog.exec() == QFileDialog.Accepted:
+            selected_files = dialog.selectedFiles()
+            if selected_files:
+                self._handle_file_drop(Path(selected_files[0]))
+
+    def _load_nautilus_bookmarks(self) -> list[Path]:
+        """Load bookmarks from Nautilus/GTK."""
+        bookmarks = []
+        bookmark_file = Path.home() / ".config/gtk-3.0/bookmarks"
+
+        if not bookmark_file.exists():
+            return bookmarks
+
+        try:
+            with open(bookmark_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+
+                    # Format: file:///path/to/folder Name (optional)
+                    parts = line.split(maxsplit=1)
+                    url = parts[0]
+
+                    if url.startswith("file://"):
+                        # Decode URL encoding (%20 -> space, etc.)
+                        from urllib.parse import unquote
+                        path_str = unquote(url[7:])  # Remove "file://"
+                        path = Path(path_str)
+                        if path.exists() and path.is_dir():
+                            bookmarks.append(path)
+        except Exception:
+            pass  # Fail silently
+
+        return bookmarks
 
     def _handle_file_drop(self, path: Path) -> None:
+        # Prevent loading while already loading
+        if self._is_loading:
+            self.status_bar.showMessage("Bitte warten, es wird bereits geladen...", 2000)
+            return
+
         if not path.exists():
             self._show_error(f"Datei wurde nicht gefunden:\n{path}")
             return
 
+        self._is_loading = True
+
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             self._show_error("Das Dateiformat wird derzeit nicht unterstützt.")
+            self._is_loading = False
             return
 
         try:
@@ -706,6 +769,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # fail fast + visible error dialog
             self.logger.exception("Fehler beim Laden von %s", path)
             self._show_error(f"Bild konnte nicht geladen werden:\n{exc}")
+            self._is_loading = False
             return
 
         self._reset_internal_state(clear_canvas=False)
@@ -715,6 +779,7 @@ class MainWindow(QMainWindow):
             image = self.session.load(path)
         except ImageSessionError as exc:
             self._show_error(str(exc))
+            self._is_loading = False
             return
         self.current_folder = path.parent
         self.current_adjusted_image = image.copy()
@@ -739,11 +804,9 @@ class MainWindow(QMainWindow):
         self._set_view_mode("single")
         self._refresh_gallery_from_current_image(load=True)
 
-        # Hide browser and show image controls after loading image
-        self.toggle_browser_btn.setChecked(False)
-        if hasattr(self, "toggle_browser_action"):
-            self.toggle_browser_action.setChecked(False)
-        self._toggle_file_browser(False)
+        # Done loading
+        self._is_loading = False
+
 
     def _open_initial_image(self, path: Path) -> None:
         if not path.exists():
@@ -1151,14 +1214,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(f"ComfyUI konnte nicht gestartet werden: {exc}")
 
-    def _toggle_file_browser(self, checked: bool) -> None:
-        """Toggle between file browser and image controls."""
-        self.file_browser.setVisible(checked)
-        if checked:
-            self.image_controls_container.hide()
-        else:
-            self.file_browser.hide()
-            self.image_controls_container.show()
 
     def _toggle_sliders_visibility(self, checked: bool) -> None:
         """Toggle slider container visibility (accordion)."""
@@ -1213,16 +1268,35 @@ class MainWindow(QMainWindow):
         should_load = load if load is not None else self.view_mode == "gallery"
         count = 0
         if should_load:
+            # Show loading message
+            self._append_status(">>> Bitte warten, Bilder werden geladen...")
+            self.status_bar.showMessage("Galerie wird geladen...", 0)
+            QApplication.processEvents()  # Force UI update
+
             try:
                 count = self.gallery_grid.load_directory(directory)
-                self._append_status(f"Galerie geladen: {directory} ({count} Dateien)")
+                self._append_status(f">>> Fertig: {count} Bilder geladen")
+                self.status_bar.clearMessage()
             except Exception as exc:
-                self._append_status(f"Galerie konnte nicht geladen werden: {exc}")
+                import traceback
+                self._append_status(f"✗ Galerie konnte nicht geladen werden: {exc}")
+                self._append_status(traceback.format_exc())
+                self.status_bar.showMessage(f"Fehler beim Laden: {exc}", 5000)
                 count = 0
 
         self._gallery_image_count = count
         self.delete_selected_btn.setEnabled(False)
         self.gallery_grid.viewport().update()
+
+    def _set_gallery_sort(self, mode: str) -> None:
+        """Change gallery sort mode and update button states."""
+        # Update button states (only one checked at a time)
+        self.sort_name_btn.setChecked(mode == "name")
+        self.sort_date_btn.setChecked(mode == "date")
+        self.sort_resolution_btn.setChecked(mode == "resolution")
+
+        # Update gallery sort mode
+        self.gallery_grid.set_sort_mode(mode)
 
     def _update_gallery_selection_state(self) -> None:
         """Update selection label and delete button state based on grid selection."""
@@ -2023,10 +2097,11 @@ class MainWindow(QMainWindow):
 
         # Suggested path
         suggested_path = None
+        default_format = None
         if self.image_store.current:
-            suggested_path = self.image_store.current.path.parent / (
-                self.image_store.current.path.stem + ".webp"
-            )
+            suggested_path = self.image_store.current.path
+            default_format = self.image_store.current.path.suffix
+        bookmarks = self._load_nautilus_bookmarks()
 
         # Show dialog
         dialog = SaveAsDialog(
@@ -2034,6 +2109,8 @@ class MainWindow(QMainWindow):
             source_width=source_width,
             source_height=source_height,
             suggested_path=suggested_path,
+            bookmarks=bookmarks,
+            default_format=default_format,
         )
 
         self._append_status("=== Save As Dialog geöffnet ===")
@@ -2205,14 +2282,12 @@ class MainWindow(QMainWindow):
         menu.exec(pos)
 
     def _open_recent_folder(self, folder_path: Path) -> None:
-        """Open file browser and navigate to the folder."""
+        """Open folder in gallery view."""
         if not folder_path.exists():
             self._show_error(f"Ordner existiert nicht mehr:\n{folder_path}")
             return
 
-        # Jump directly into gallery view for this folder (no sidebar preview)
-        self.toggle_browser_btn.setChecked(False)
-        self._toggle_file_browser(False)
+        # Jump directly into gallery view for this folder
         self.current_folder = folder_path
         self.current_image_path = None
         self._set_view_mode("gallery")

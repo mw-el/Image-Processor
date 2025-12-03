@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QFormLayout,
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QUrl
 import qtawesome as qta
 
 
@@ -43,6 +43,8 @@ class SaveAsDialog(QDialog):
         source_width: int = 1920,
         source_height: int = 1080,
         suggested_path: Path | None = None,
+        bookmarks: list[Path] | None = None,
+        default_format: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Speichern unter...")
@@ -54,10 +56,18 @@ class SaveAsDialog(QDialog):
         self.result: Optional[SaveAsResult] = None
         self._updating = False
 
+        self.bookmarks = [p for p in bookmarks or [] if p.exists()]
+
         # Store base path info for filename generation
         base_path = suggested_path or Path.home() / "image.webp"
+        self._selected_format = (
+            self._format_from_suffix(base_path.suffix)
+            or self._normalize_format(default_format)
+            or "WebP"
+        )
         self._base_dir = base_path.parent
         self._base_name = base_path.stem  # Original filename without extension
+        self._initial_path = self._generate_initial_path()
 
         self._create_ui()
 
@@ -86,18 +96,17 @@ class SaveAsDialog(QDialog):
         path_group = QGroupBox("Speicherort")
         path_layout = QHBoxLayout(path_group)
 
-        # Initial path with resolution
-        initial_filename = f"{self._base_name}_{self.source_width}x{self.source_height}.webp"
-        initial_path = self._base_dir / initial_filename
-        self.path_edit = QLineEdit(str(initial_path))
+        # Initial path with resolution and current format
+        self.path_edit = QLineEdit(str(self._initial_path))
         self.path_edit.setMinimumWidth(250)
+        self.path_edit.editingFinished.connect(self._on_path_edited)
         path_layout.addWidget(self.path_edit)
 
         browse_btn = QPushButton()
         browse_btn.setIcon(qta.icon("mdi6.folder-open", color="white"))
         browse_btn.setIconSize(QSize(20, 20))
         browse_btn.setFixedSize(36, 36)
-        browse_btn.setToolTip("Ordner wählen")
+        browse_btn.setToolTip("Ziel wählen")
         browse_btn.setStyleSheet(btn_style)
         browse_btn.clicked.connect(self._browse_path)
         path_layout.addWidget(browse_btn)
@@ -146,6 +155,7 @@ class SaveAsDialog(QDialog):
 
         self.format_combo = QComboBox()
         self.format_combo.addItems(["WebP", "PNG", "JPEG"])
+        self._set_format_combo(self._selected_format)
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
         format_layout.addRow("Bildformat:", self.format_combo)
 
@@ -178,12 +188,53 @@ class SaveAsDialog(QDialog):
         except (ValueError, ZeroDivisionError):
             return f"{self.aspect_ratio:.2f}:1"
 
+    def _normalize_format(self, format_text: str | None) -> str | None:
+        """Normalize different format strings/suffixes to combo display text."""
+        if not format_text:
+            return None
+        mapping = {
+            "webp": "WebP",
+            "png": "PNG",
+            "jpeg": "JPEG",
+            "jpg": "JPEG",
+            ".webp": "WebP",
+            ".png": "PNG",
+            ".jpeg": "JPEG",
+            ".jpg": "JPEG",
+        }
+        return mapping.get(format_text.lower())
+
+    def _format_from_suffix(self, suffix: str) -> str | None:
+        return self._normalize_format(suffix)
+
+    def _extension_for_format(self, format_text: str) -> str:
+        return {"WebP": ".webp", "PNG": ".png", "JPEG": ".jpg"}.get(format_text, ".webp")
+
+    def _current_format_text(self) -> str:
+        combo = getattr(self, "format_combo", None)
+        if combo:
+            return combo.currentText()
+        return self._selected_format
+
+    def _generate_initial_path(self) -> Path:
+        ext = self._extension_for_format(self._selected_format)
+        filename = f"{self._base_name}_{self.source_width}x{self.source_height}{ext}"
+        return self._base_dir / filename
+
+    def _set_format_combo(self, format_text: str) -> None:
+        if not hasattr(self, "format_combo"):
+            return
+        idx = self.format_combo.findText(format_text, Qt.MatchFixedString)
+        if idx != -1:
+            self.format_combo.blockSignals(True)
+            self.format_combo.setCurrentIndex(idx)
+            self.format_combo.blockSignals(False)
+
     def _generate_filename_with_resolution(self) -> Path:
         """Generate filename including current resolution."""
         width = self.width_spin.value()
         height = self.height_spin.value()
-        ext_map = {"WebP": ".webp", "PNG": ".png", "JPEG": ".jpg"}
-        ext = ext_map.get(self.format_combo.currentText(), ".webp")
+        ext = self._extension_for_format(self._current_format_text())
         filename = f"{self._base_name}_{width}x{height}{ext}"
         return self._base_dir / filename
 
@@ -216,26 +267,61 @@ class SaveAsDialog(QDialog):
 
     def _on_format_changed(self, format_text: str) -> None:
         """Update file extension when format changes."""
+        self._selected_format = format_text
         self._update_path_with_resolution()
 
     def _browse_path(self) -> None:
         """Open file dialog to select save path."""
-        current_format = self.format_combo.currentText()
+        current_format = self._current_format_text()
         filter_map = {
             "WebP": "WebP Bilder (*.webp)",
             "PNG": "PNG Bilder (*.png)",
             "JPEG": "JPEG Bilder (*.jpg *.jpeg)",
         }
         file_filter = filter_map.get(current_format, "Alle Bilder (*.*)")
+        start_dir = Path(self.path_edit.text()).parent if self.path_edit.text() else self._base_dir
 
-        file_path, _ = QFileDialog.getSaveFileName(
+        dialog = QFileDialog(
             self,
             "Speichern unter",
-            self.path_edit.text(),
+            str(start_dir),
             file_filter,
         )
-        if file_path:
-            self.path_edit.setText(file_path)
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.AnyFile)
+        dialog.setOptions(QFileDialog.DontUseNativeDialog)
+
+        for bookmark in self.bookmarks:
+            dialog.setSidebarUrls(dialog.sidebarUrls() + [QUrl.fromLocalFile(str(bookmark))])
+
+        # Preselect current suggestion
+        dialog.selectFile(str(self._generate_filename_with_resolution()))
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_files = dialog.selectedFiles()
+            if selected_files:
+                self._apply_selected_path(Path(selected_files[0]))
+
+    def _on_path_edited(self) -> None:
+        """Update defaults when the user edits the path manually."""
+        path_text = self.path_edit.text().strip()
+        if not path_text:
+            return
+        self._apply_selected_path(Path(path_text))
+
+    def _apply_selected_path(self, path: Path) -> None:
+        """Update base dir/name and format based on selected path."""
+        detected_format = self._format_from_suffix(path.suffix)
+        if detected_format:
+            self._selected_format = detected_format
+            self._set_format_combo(detected_format)
+
+        if path.suffix:
+            path = path.with_suffix(self._extension_for_format(self._current_format_text()))
+
+        self._base_dir = path.parent
+        self._base_name = path.stem
+        self._update_path_with_resolution()
 
     def _on_save(self) -> None:
         """Validate and accept dialog."""
