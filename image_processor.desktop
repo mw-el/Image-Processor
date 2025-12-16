@@ -1,11 +1,18 @@
 [Desktop Entry]
+Type=Application
 Name=AA Image Processor
-Comment=Zuschneiden und exportieren von WebP-Varianten
+GenericName=Image Processor
+Comment=Crop and export WebP image variants
 Exec=/home/matthias/_AA_Image_Processor/start_image_processor.sh %u
 Icon=/home/matthias/_AA_Image_Processor/image_processor.png
 Terminal=false
-Type=Application
 Categories=Graphics;Photography;
+Keywords=image;crop;webp;export;resize;
 StartupNotify=true
 MimeType=image/jpeg;image/png;image/webp;image/bmp;image/tiff;
 StartupWMClass=AA Image Processor
+Actions=Quit;
+
+[Desktop Action Quit]
+Name=Quit Image Processor
+Exec=pkill -f "python.*src.app"
